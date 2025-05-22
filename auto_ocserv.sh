@@ -4,7 +4,7 @@ set -e
 NUM_USERS=5000
 USER_FILE="/etc/ocserv/ocpasswd"
 CSV_FILE="/root/vpn_users.csv"
-OCSERV_PORT=4443    # recommended port for OpenConnect when OpenVPN is also installed
+OCSERV_PORT=4443    # Recommended port for OpenConnect (no conflict with OpenVPN default)
 
 # Install ocserv and tools
 apt-get update
@@ -55,12 +55,14 @@ echo "username,password" > "$CSV_FILE"
 for i in $(seq 1 $NUM_USERS); do
     uname=$(cat /dev/urandom | tr -dc 'a-z0-9' | head -c$((RANDOM%3+4)))
     pass=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c$((RANDOM%3+4)))
-    ocpasswd -c "$USER_FILE" -g default -B "$uname" <<<"$pass"$'\n'"$pass"
-    echo "$uname,$pass" >> "$CSV_FILE"
     if [[ $i -eq 1 ]]; then
+        ocpasswd -c "$USER_FILE" -g default "$uname" <<<"$pass"$'\n'"$pass"
         FIRST_USER="$uname"
         FIRST_PASS="$pass"
+    else
+        ocpasswd -g default "$uname" <<<"$pass"$'\n'"$pass"
     fi
+    echo "$uname,$pass" >> "$CSV_FILE"
 done
 
 systemctl restart ocserv
