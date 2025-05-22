@@ -56,8 +56,18 @@ fi
 echo "username,password" > "$CSV_FILE"
 
 for i in $(seq 1 $NUM_USERS); do
-    uname=$(cat /dev/urandom | tr -dc 'a-z0-9' | head -c$((RANDOM%3+4)))
-    pass=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c$((RANDOM%3+4)))
+    # Username: First upper, 2-4 lower, last number (total 4-6 chars)
+    uname_first=$(tr -dc 'A-Z' < /dev/urandom | head -c1)
+    uname_middle=$(tr -dc 'a-z' < /dev/urandom | head -c$((RANDOM%3+2)))  # 2 to 4
+    uname_last=$(tr -dc '0-9' < /dev/urandom | head -c1)
+    uname="${uname_first}${uname_middle}${uname_last}"
+
+    # Password: Same pattern
+    pass_first=$(tr -dc 'A-Z' < /dev/urandom | head -c1)
+    pass_middle=$(tr -dc 'a-z' < /dev/urandom | head -c$((RANDOM%3+2)))  # 2 to 4
+    pass_last=$(tr -dc '0-9' < /dev/urandom | head -c1)
+    pass="${pass_first}${pass_middle}${pass_last}"
+
     if [[ $i -eq 1 ]]; then
         ocpasswd -c "$USER_FILE" -g default "$uname" <<<"$pass"$'\n'"$pass"
         FIRST_USER="$uname"
