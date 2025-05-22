@@ -51,7 +51,7 @@ else
     iptables -I INPUT -p udp --dport ${OCSERV_PORT} -j ACCEPT
 fi
 
-# Create users (4-6 char random user/pass, a-z0-9)
+# Create users (4-6 char random user/pass, a-z0-9, format: Upper+lower+digit)
 > "$USER_FILE"
 echo "username,password" > "$CSV_FILE"
 
@@ -81,9 +81,45 @@ done
 systemctl restart ocserv
 systemctl enable ocserv
 
+# === Admin status tool ===
+cat >/usr/local/bin/server_status <<'EOSTATUS'
+#!/bin/bash
+CSV_FILE="/root/vpn_users.csv"
+CONF_FILE="/etc/ocserv/ocserv.conf"
+
+USER_COUNT=$(($(wc -l < $CSV_FILE) - 1))
+MAX_CLIENTS=$(grep max-clients $CONF_FILE | awk '{print $3}')
+OCSERV_PORT=$(grep tcp-port $CONF_FILE | awk '{print $3}')
+IP=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')
+CONNECTED=$(sudo occtl show users | grep -c Username)
+UPTIME=$(uptime -p)
+MEMORY=$(free -h | awk '/^Mem/ {print $3 "/" $2}')
+DISK=$(df -h / | awk '$NF=="/"{print $3 "/" $2 " (" $5 " used)"}')
+
+CONNECTED_USERS=$(sudo occtl show users | grep Username | awk '{print $2}' | tr '\n' ' ')
+
+echo ""
+echo "========== OpenConnect VPN Server Status =========="
+echo "Server IP                 : $IP"
+echo "OpenConnect Port          : $OCSERV_PORT"
+echo "Total user accounts       : $USER_COUNT"
+echo "Maximum simultaneous users: $MAX_CLIENTS"
+echo "Currently connected users : $CONNECTED"
+echo "Connected usernames       : $CONNECTED_USERS"
+echo "Server uptime             : $UPTIME"
+echo "RAM usage                 : $MEMORY"
+echo "Disk usage (root)         : $DISK"
+echo "Config file               : $CONF_FILE"
+echo "Users file (CSV)          : $CSV_FILE"
+echo "==================================================="
+echo ""
+EOSTATUS
+
+chmod +x /usr/local/bin/server_status
+
 clear
 echo ""
-echo "✅ OpenConnect (ocserv) Installed!"
+echo "✅ OpenConnect (ocserv) (6000 Users License) Installed!"
 echo "======================================="
 echo "Server IP   : $IP"
 echo "Port        : $OCSERV_PORT"
@@ -94,7 +130,9 @@ echo ""
 echo "• Connect using any OpenConnect client."
 echo "• To see all users, check: $CSV_FILE"
 echo ""
+echo "• To check server status at any time, run: server_status"
+echo ""
 echo "• You can safely install OpenVPN Access Server as usual."
 echo "   It will use UDP 1194 for VPN and TCP 943/9443 for web."
-echo ""
-echo "Enjoy dual VPN hosting! Update 2"
+echo "Developer Miah Mohammed Yeasin"
+echo "Enjoy dual VPN hosting! Update 2025"
