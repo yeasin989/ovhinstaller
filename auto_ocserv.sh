@@ -21,7 +21,7 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
     -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.crt" \
     -subj "/C=US/ST=NA/L=NA/O=NA/CN=$IP"
 
-# Create ocserv.conf with all required options, including socket-file
+# Create ocserv.conf with all required options (socket-file, device, etc)
 cat >/etc/ocserv/ocserv.conf <<EOF
 auth = "plain[/etc/ocserv/ocpasswd]"
 tcp-port = $OCSERV_PORT
@@ -29,6 +29,7 @@ udp-port = $OCSERV_PORT
 server-cert = $CERT_DIR/server.crt
 server-key = $CERT_DIR/server.key
 socket-file = $SOCKET_FILE
+device = vpns
 max-clients = 6000
 max-same-clients = 1
 default-domain = vpn
@@ -86,4 +87,4 @@ echo ""
 echo "• You can safely install OpenVPN Access Server as usual."
 echo "   It will use UDP 1194 for VPN and TCP 943/9443 for web."
 echo ""
-echo "Enjoy dual VPN hosting!"
+echo "Enjoy dual VPN hosting! Update 2"
