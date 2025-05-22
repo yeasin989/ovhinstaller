@@ -4,7 +4,8 @@ set -e
 NUM_USERS=5000
 USER_FILE="/etc/ocserv/ocpasswd"
 CSV_FILE="/root/vpn_users.csv"
-OCSERV_PORT=4443    # Recommended port for OpenConnect (no conflict with OpenVPN default)
+OCSERV_PORT=4443    # No conflict with OpenVPN default
+SOCKET_FILE="/run/ocserv.socket"
 
 # Install ocserv and tools
 apt-get update
@@ -20,13 +21,14 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
     -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.crt" \
     -subj "/C=US/ST=NA/L=NA/O=NA/CN=$IP"
 
-# Create ocserv.conf with custom port
+# Create ocserv.conf with all required options, including socket-file
 cat >/etc/ocserv/ocserv.conf <<EOF
 auth = "plain[/etc/ocserv/ocpasswd]"
 tcp-port = $OCSERV_PORT
 udp-port = $OCSERV_PORT
 server-cert = $CERT_DIR/server.crt
 server-key = $CERT_DIR/server.key
+socket-file = $SOCKET_FILE
 max-clients = 6000
 max-same-clients = 1
 default-domain = vpn
