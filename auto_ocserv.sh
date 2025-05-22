@@ -9,10 +9,27 @@ SOCKET_FILE="/run/ocserv.socket"
 
 # Install ocserv and tools
 apt-get update
-apt-get install -y ocserv openssl pwgen curl
+apt-get install -y ocserv openssl pwgen curl iproute2
 
 # Get public IP
 IP=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')
+
+# Detect default network interface (used for NAT)
+IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+if [ -z "$IFACE" ]; then
+    echo "Could not detect default network interface. Please check manually."
+    exit 1
+fi
+
+# Enable IP forwarding
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ocserv-forward.conf
+sysctl -w net.ipv4.ip_forward=1
+
+# Setup NAT/Masquerading
+iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o "$IFACE" -j MASQUERADE
+# Save iptables rule
+apt-get install -y iptables-persistent
+netfilter-persistent save
 
 # Generate self-signed cert
 CERT_DIR="/etc/ocserv/certs"
@@ -40,8 +57,8 @@ EOF
 
 # Open firewall for OpenConnect port
 if command -v ufw &>/dev/null; then
-    ufw allow ${OCSERV_PORT}/tcp
-    ufw allow ${OCSERV_PORT}/udp
+    ufw allow ${OCSERV_PORT}/tcp > /dev/null 2>&1
+    ufw allow ${OCSERV_PORT}/udp > /dev/null 2>&1
 elif command -v firewall-cmd &>/dev/null; then
     firewall-cmd --add-port=${OCSERV_PORT}/tcp --permanent
     firewall-cmd --add-port=${OCSERV_PORT}/udp --permanent
@@ -51,20 +68,18 @@ else
     iptables -I INPUT -p udp --dport ${OCSERV_PORT} -j ACCEPT
 fi
 
-# Create users (4-6 char random user/pass, a-z0-9, format: Upper+lower+digit)
+# Create users (First uppercase, 2-4 lowercase, last digit; total 4-6 chars)
 > "$USER_FILE"
 echo "username,password" > "$CSV_FILE"
 
 for i in $(seq 1 $NUM_USERS); do
-    # Username: First upper, 2-4 lower, last number (total 4-6 chars)
     uname_first=$(tr -dc 'A-Z' < /dev/urandom | head -c1)
     uname_middle=$(tr -dc 'a-z' < /dev/urandom | head -c$((RANDOM%3+2)))  # 2 to 4
     uname_last=$(tr -dc '0-9' < /dev/urandom | head -c1)
     uname="${uname_first}${uname_middle}${uname_last}"
 
-    # Password: Same pattern
     pass_first=$(tr -dc 'A-Z' < /dev/urandom | head -c1)
-    pass_middle=$(tr -dc 'a-z' < /dev/urandom | head -c$((RANDOM%3+2)))  # 2 to 4
+    pass_middle=$(tr -dc 'a-z' < /dev/urandom | head -c$((RANDOM%3+2)))
     pass_last=$(tr -dc '0-9' < /dev/urandom | head -c1)
     pass="${pass_first}${pass_middle}${pass_last}"
 
@@ -95,7 +110,6 @@ CONNECTED=$(sudo occtl show users | grep -c Username)
 UPTIME=$(uptime -p)
 MEMORY=$(free -h | awk '/^Mem/ {print $3 "/" $2}')
 DISK=$(df -h / | awk '$NF=="/"{print $3 "/" $2 " (" $5 " used)"}')
-
 CONNECTED_USERS=$(sudo occtl show users | grep Username | awk '{print $2}' | tr '\n' ' ')
 
 echo ""
@@ -119,7 +133,7 @@ chmod +x /usr/local/bin/server_status
 
 clear
 echo ""
-echo "✅ OpenConnect (ocserv) (6000 Users License) Installed!"
+echo "✅ OpenConnect (ocserv) Installed!"
 echo "======================================="
 echo "Server IP   : $IP"
 echo "Port        : $OCSERV_PORT"
@@ -130,9 +144,9 @@ echo ""
 echo "• Connect using any OpenConnect client."
 echo "• To see all users, check: $CSV_FILE"
 echo ""
-echo "• To check server status at any time, just run: server_status"
+echo "• To check server status at any time, run: server_status"
 echo ""
 echo "• You can safely install OpenVPN Access Server as usual."
 echo "   It will use UDP 1194 for VPN and TCP 943/9443 for web."
-echo "Developer Miah Mohammed Yeasin"
+echo ""
 echo "Enjoy dual VPN hosting! Update 2025"
