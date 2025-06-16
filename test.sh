@@ -122,36 +122,9 @@ def get_users():
                     users.append({'username': row[0], 'password': row[1]})
     return users
 
-def add_user_csv(username, password):
-    exists = False
-    users = []
-    with open(CSV_FILE) as f:
-        for row in csv.reader(f):
-            if row and row[0] == username:
-                exists = True
-            users.append(row)
-    if not exists:
-        with open(CSV_FILE, 'a') as f:
-            f.write(f"{username},{password}\n")
-    return not exists
-
-def delete_user_csv(username):
-    if not os.path.exists(CSV_FILE): return
-    rows = []
-    with open(CSV_FILE) as f:
-        for row in csv.reader(f):
-            if row and row[0] == 'username':
-                rows.append(row)
-            elif row and row[0] != username:
-                rows.append(row)
-    with open(CSV_FILE, 'w') as f:
-        writer = csv.writer(f)
-        writer.writerows(rows)
-
 @app.route('/', methods=['GET', 'POST'])
 def login():
-    if 'admin' in session:
-        return redirect(url_for('dashboard'))
+    if 'admin' in session: return redirect(url_for('dashboard'))
     if request.method == 'POST':
         creds = load_admin()
         if request.form['username'] == creds['username'] and request.form['password'] == creds['password']:
@@ -162,22 +135,23 @@ def login():
     <html>
     <head>
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>VPN Admin Login</title>
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+      <title>OpenConnect Admin Login</title>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@700;900&display=swap" rel="stylesheet">
+      <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
       <style>
-        body { background: linear-gradient(135deg, #17233e 0%, #396bba 100%); font-family: 'Inter', sans-serif; margin: 0;}
-        .login-card { max-width: 400px; margin: 12vh auto 0 auto; background: #fff; border-radius: 20px; padding: 40px 26px; box-shadow: 0 8px 32px #0003;}
-        h2 { margin-top: 0; color: #113264; font-weight: 900;}
-        input { margin-bottom: 16px; width: 100%; padding: 14px; border-radius: 8px; border: 1px solid #c6c6d6; font-size: 1.1em;}
-        button { width: 100%; padding: 13px; border: 0; border-radius: 8px; background: linear-gradient(90deg, #278cfb 0%, #1abc9c 100%); color: #fff; font-weight: bold; font-size: 1.15em; transition: all .2s;}
-        button:hover { filter: brightness(0.95);}
-        .toast { color: #e9435b; margin-top: 12px; text-align: center; font-weight: 700;}
-        @media(max-width:600px) { .login-card { padding: 20px 6px; } }
+        body {background: linear-gradient(120deg, #232e47 0%, #447cfb 100%); min-height:100vh; font-family: 'Inter',sans-serif; margin:0;}
+        .login-card {max-width:380px; margin:80px auto; background:#fff; border-radius:20px; box-shadow:0 8px 32px #0002; padding:36px 28px;}
+        h2 {margin:0 0 20px 0; color:#2354be; font-size:2em; font-weight:900;}
+        input {width:100%; padding:15px; border-radius:9px; border:1px solid #bcd; margin-bottom:16px; font-size:1.1em;}
+        button {width:100%; background:linear-gradient(90deg,#3579f8,#43e3c1); color:#fff; border:0; border-radius:9px; font-size:1.12em; font-weight:700; padding:14px; transition:.15s;}
+        button:hover {filter:brightness(.97);}
+        .toast {color:#e9435b; font-weight:700; margin-top:12px;}
+        @media(max-width:600px) {.login-card{padding:18px 8px;}}
       </style>
     </head>
     <body>
-      <form class="login-card" method=post action="{{ url_for('login') }}">
-        <h2>OpenConnect<br>Admin Login</h2>
+      <form class="login-card" method=post>
+        <h2>OpenConnect<br>Admin</h2>
         <input name=username placeholder="admin" required>
         <input name=password type=password placeholder="password" required>
         <button>Login</button>
@@ -188,77 +162,85 @@ def login():
     </html>
     ''')
 
-@app.route('/dashboard')
+@app.route('/dashboard', methods=['GET', 'POST'])
 def dashboard():
-    if 'admin' not in session:
-        return redirect(url_for('login'))
+    if 'admin' not in session: return redirect(url_for('login'))
     users = get_users()
     admin = load_admin()
     server_ip = get_ip()
     panel_port = PANEL_PORT
+    edit = request.args.get('edit') == '1'
     return render_template_string('''
     <html>
     <head>
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>VPN Admin Panel</title>
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+      <title>OpenConnect Admin</title>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@700;900&display=swap" rel="stylesheet">
+      <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
       <style>
-        html, body { height: 100%; margin: 0; padding: 0; background: linear-gradient(135deg, #17233e 0%, #396bba 100%); font-family: 'Inter', sans-serif;}
-        body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;}
-        .main-card { background: #fff; max-width: 420px; width: 98vw; margin: 34px 0 64px 0; border-radius: 22px; box-shadow: 0 10px 40px #0002; display: flex; flex-direction: column; padding: 34px 5vw 28px 5vw; min-height: 80vh;}
-        h2 { color: #113264; font-size: 2.1em; font-weight: 900; margin-bottom: 18px;}
-        .server-row { display: flex; flex-wrap: wrap; align-items: center; gap: 13px; margin-bottom: 26px;}
-        .tag { background: #e7f1fd; color: #2763b6; padding: 7px 14px; border-radius: 24px; font-weight: 700; margin-right: 7px; font-size: 0.97em; display: inline-block;}
-        .copy-btn { margin-left: 5px; padding: 6px 12px 6px 11px; border: none; border-radius: 5px; background: #e8effa; color: #2263db; font-weight: 700; font-size: 1.03em; cursor: pointer; transition: all .17s;}
-        .copy-btn:active { background: #b5d1f8; }
-        .form-row { display: flex; gap: 7px; margin-bottom: 20px; flex-wrap: wrap;}
-        .form-row input { flex: 1; min-width: 0;}
-        .form-row button { white-space: nowrap;}
-        table { width: 100%; margin-top: 12px; border-collapse: collapse;}
-        th, td { padding: 13px 6px; text-align: left;}
-        th { background: #f7f9fb;}
-        tr:nth-child(even) { background: #f2f6fa;}
-        .delbtn { background: #e9435b; color: #fff; padding: 7px 16px; border: 0; border-radius: 6px; font-weight: bold; font-size: 1em;}
-        .delbtn:active { background: #bd2737;}
-        .change-admin-form { display: flex; gap: 8px; margin-top: 12px;}
-        .change-admin-form input { flex: 1; min-width: 0;}
-        .bottom-bar { width: 100vw; position: fixed; left: 0; bottom: 0; z-index: 100; background: rgba(255,255,255,0.88); padding: 12px 0 10px 0; box-shadow: 0 -1px 8px #0002; display: flex; justify-content: center;}
-        .logout { background: linear-gradient(90deg, #e9435b 0%, #f8872e 100%); padding: 13px 46px; border-radius: 40px; color: #fff; font-weight: 900; font-size: 1.13em; border: none; box-shadow: 0 1px 7px #d9594038; transition: all .18s; margin: 0 auto;}
-        .logout:active { filter: brightness(0.92);}
-        .toast { padding: 10px 0; text-align: center; border-radius: 8px; font-size: 1.09em; margin-bottom: 16px;}
-        .success { background: #c2ffd0; color: #0b6117;}
-        .error { background: #ffd2d2; color: #a31a2a;}
-        .info { background: #e8f5ff; color: #2271b3;}
-        @media (max-width: 500px) { .main-card { padding: 13px 2vw 24px 2vw; min-height: 94vh; } h2 { font-size: 1.36em; } }
+        body {background: linear-gradient(120deg,#232e47 0%,#447cfb 100%); min-height:100vh; margin:0;}
+        .main-wrap {max-width:420px; margin:0 auto 0 auto; padding:24px 0;}
+        .header {font-size:2.1em; color:#fff; font-weight:900; letter-spacing:-1px; margin-bottom:24px; text-align:center;}
+        .card {background:#fff; border-radius:18px; box-shadow:0 6px 32px #0002; margin-bottom:21px; padding:22px 18px; display:flex; flex-direction:column;}
+        .row {display:flex;align-items:center;gap:14px;margin-bottom:10px;}
+        .icon-btn {background:#edf3fd;border-radius:9px;border:0;padding:8px 11px;cursor:pointer;font-size:1.35em;vertical-align:middle;display:inline-flex;align-items:center;}
+        .icon-btn:active{background:#cbe0fc;}
+        .ip-port {font-size:1.13em; color:#2263db; font-weight:800;}
+        .adduser-input {flex:1;}
+        .user-table {width:100%; margin-top:10px; border-collapse:collapse;}
+        .user-table th, .user-table td {padding:10px 6px;text-align:left;}
+        .user-table th {background:#f2f7ff;}
+        .user-table tr:nth-child(even) {background:#f7fafd;}
+        .user-delete-btn {background:#ffebee; color:#e9435b; border-radius:9px; border:0; font-size:1.1em; cursor:pointer; padding:5px 10px;}
+        .user-delete-btn:active {background:#f9bbbe;}
+        .admin-row {display:flex;align-items:center;justify-content:space-between;}
+        .admin-label {color:#888;font-size:.97em;}
+        .admin-value {font-size:1.04em;}
+        .edit-btn {background:none; border:0; color:#3579f8; font-size:1.24em; cursor:pointer; margin-left:8px;}
+        .edit-btn:active {color:#1e2c7d;}
+        .panel-info {color:#115; font-size:1.01em;}
+        .copy-cmd-box {display:flex;align-items:center;gap:10px;margin-top:6px;}
+        .copy-cmd-inp {flex:1; font-size:1em; padding:8px 9px; border-radius:8px; border:1px solid #cce;}
+        .copy-cmd-icon {background:#edf3fd;border-radius:8px;border:0;padding:8px 11px;cursor:pointer;font-size:1.35em;vertical-align:middle;display:inline-flex;align-items:center;}
+        .copy-cmd-icon:active{background:#cbe0fc;}
+        .save-btn {margin-top:12px;width:100%;background:linear-gradient(90deg,#3579f8,#43e3c1); color:#fff; border:0; border-radius:9px; font-size:1.09em; font-weight:700; padding:13px;}
+        .save-btn:active {filter:brightness(.97);}
+        @media(max-width:480px) {
+            .main-wrap {padding:8px 2vw;}
+            .card {padding:14px 4vw;}
+        }
       </style>
     </head>
     <body>
-      <div class="main-card">
-        <h2>OpenConnect VPN Admin Panel</h2>
-        <div class="server-row">
-          <div class="tag">Server IP</div>
-          <div>
-            <span id="ipcopy">{{server_ip}}</span>
-            <button class="copy-btn" onclick="copyText('{{server_ip}}');return false;">Copy</button>
-          </div>
-          <div class="tag">VPN Port</div>
-          <div>
-            <span id="portcopy">{{panel_port}}</span>
-            <button class="copy-btn" onclick="copyText('{{panel_port}}');return false;">Copy</button>
-          </div>
+    <div class="main-wrap">
+      <div class="header">OpenConnect Admin</div>
+      <!-- Card 1: Server Info -->
+      <div class="card">
+        <div class="row">
+          <span class="ip-port">Server IP:</span>
+          <span>{{server_ip}}</span>
+          <button class="icon-btn" onclick="copyText('{{server_ip}}')" title="Copy IP"><span class="material-icons">content_copy</span></button>
         </div>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% for cat,msg in messages %}
-            <div class="toast {{cat}}">{{msg}}</div>
-          {% endfor %}
-        {% endwith %}
-        <form method="post" action="{{ url_for('add_user') }}" class="form-row">
-          <input name="username" placeholder="username" required minlength=2>
-          <input name="password" placeholder="password" required minlength=3>
-          <button>Add User</button>
+        <div class="row">
+          <span class="ip-port">VPN Port:</span>
+          <span>{{panel_port}}</span>
+          <button class="icon-btn" onclick="copyText('{{panel_port}}')" title="Copy Port"><span class="material-icons">content_copy</span></button>
+        </div>
+      </div>
+
+      <!-- Card 2: Add User -->
+      <div class="card">
+        <form method="post" action="{{ url_for('add_user') }}" style="display:flex;gap:10px;">
+          <input class="adduser-input" name="username" placeholder="Username" required minlength=2>
+          <input class="adduser-input" name="password" placeholder="Password" required minlength=3>
+          <button class="icon-btn" title="Add User" style="background:linear-gradient(90deg,#3579f8,#43e3c1);color:#fff;"><span class="material-icons">person_add</span></button>
         </form>
-        <b style="font-weight:700;">All VPN Users</b>
-        <table>
+      </div>
+
+      <!-- Card 3: Users List -->
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:10px;">All VPN Users</div>
+        <table class="user-table">
           <tr><th>Username</th><th>Password</th><th>Delete</th></tr>
           {% for user in users %}
           <tr>
@@ -267,37 +249,73 @@ def dashboard():
             <td>
               <form method="post" action="{{ url_for('del_user') }}" style="display:inline;">
                 <input type="hidden" name="username" value="{{user.username}}">
-                <button class="delbtn">Delete</button>
+                <button class="user-delete-btn" title="Delete"><span class="material-icons" style="font-size:1.09em;">delete</span></button>
               </form>
             </td>
           </tr>
           {% endfor %}
         </table>
-        <form method="post" action="{{ url_for('change_admin') }}" class="change-admin-form">
-          <input name="oldpass" type="password" placeholder="Old (5 chars)" required minlength=5 maxlength=5>
-          <input name="newpass" type="password" placeholder="New (2UC+3NUM)" required minlength=5 maxlength=5>
-          <button>Change</button>
+      </div>
+
+      <!-- Card 4: Admin Info -->
+      <div class="card">
+        {% if not edit %}
+        <div class="admin-row">
+          <div>
+            <div class="admin-label">Admin Username:</div>
+            <div class="admin-value">{{admin.username}}</div>
+            <div class="admin-label" style="margin-top:7px;">Admin Password:</div>
+            <div class="admin-value">{{admin.password}}</div>
+          </div>
+          <form method="get" action="{{ url_for('dashboard') }}">
+            <input type="hidden" name="edit" value="1">
+            <button class="edit-btn" title="Edit"><span class="material-icons">edit</span></button>
+          </form>
+        </div>
+        {% else %}
+        <form method="post" action="{{ url_for('edit_admin') }}">
+          <input name="username" placeholder="New Username" required minlength=2 value="{{admin.username}}" style="margin-bottom:9px;">
+          <input name="password" placeholder="New Password" required minlength=3 value="{{admin.password}}">
+          <button class="save-btn">Save</button>
         </form>
-        <div style="margin-top:16px;font-size:.97em;color:#888;">
-          <b>Panel:</b> {{admin.username}} <br>
-          Max Users: <b>{{max_users}}</b> (fixed) <br>
-          Recover admin: <code>sudo get_admin_info</code>
+        {% endif %}
+      </div>
+
+      <!-- Card 5: Panel Details -->
+      <div class="card">
+        <div class="panel-info">
+          <b>Max Users:</b> {{MAX_USERS}}<br>
+          <b>Recover admin:</b>
+          <div class="copy-cmd-box">
+            <input class="copy-cmd-inp" id="cmdinp" value="sudo get_admin_info" readonly>
+            <button class="copy-cmd-icon" onclick="copyCmd()" title="Copy Command"><span class="material-icons">content_copy</span></button>
+          </div>
         </div>
       </div>
-      <div class="bottom-bar">
-        <form method="post" action="{{ url_for('logout') }}" style="margin:0;">
-          <button class="logout">Logout</button>
-        </form>
-      </div>
-      <script>
-        function copyText(text) {
-          navigator.clipboard.writeText(text);
-          alert('Copied: ' + text);
-        }
-      </script>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for cat,msg in messages %}
+          <div class="card" style="background:#e0f8ee; color:#06765e; font-weight:700; text-align:center;">{{msg}}</div>
+        {% endfor %}
+      {% endwith %}
+      <form method="post" action="{{ url_for('logout') }}">
+        <button class="save-btn" style="margin:26px auto 0 auto;width:100%;">Logout</button>
+      </form>
+    </div>
+    <script>
+      function copyText(val) {
+        navigator.clipboard.writeText(val);
+        alert('Copied: ' + val);
+      }
+      function copyCmd() {
+        var cmd = document.getElementById('cmdinp');
+        cmd.select();
+        navigator.clipboard.writeText(cmd.value);
+        alert('Copied: ' + cmd.value);
+      }
+    </script>
     </body>
     </html>
-    ''', users=users, max_users=MAX_USERS, admin=admin, server_ip=server_ip, panel_port=panel_port)
+    ''', users=users, admin=admin, server_ip=server_ip, panel_port=panel_port, MAX_USERS=MAX_USERS, edit=edit)
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
@@ -308,8 +326,15 @@ def add_user():
         flash('Username and password required.', 'error')
         return redirect(url_for('dashboard'))
     subprocess.call(f"echo '{pword}\n{pword}' | ocpasswd -g default {uname}", shell=True)
-    added = add_user_csv(uname, pword)
-    if added:
+    exists = False
+    if os.path.exists(CSV_FILE):
+        with open(CSV_FILE) as f:
+            for row in csv.reader(f):
+                if row and row[0] == uname:
+                    exists = True
+    if not exists:
+        with open(CSV_FILE, 'a') as f:
+            f.write(f"{uname},{pword}\n")
         flash('User added!', 'success')
         subprocess.call("systemctl restart ocserv", shell=True)
     else:
@@ -320,28 +345,32 @@ def add_user():
 def del_user():
     if 'admin' not in session: return redirect(url_for('login'))
     uname = request.form['username']
-    if uname:
-        subprocess.call(f"ocpasswd -d {uname}", shell=True)
-        delete_user_csv(uname)
-        flash(f'User {uname} deleted.', 'success')
-        subprocess.call("systemctl restart ocserv", shell=True)
+    subprocess.call(f"ocpasswd -d {uname}", shell=True)
+    # Remove from CSV
+    rows = []
+    if os.path.exists(CSV_FILE):
+        with open(CSV_FILE) as f:
+            for row in csv.reader(f):
+                if row and row[0] != uname and row[0] != "username":
+                    rows.append(row)
+        with open(CSV_FILE, 'w') as f:
+            writer = csv.writer(f)
+            writer.writerow(["username", "password"])
+            writer.writerows(rows)
+    flash(f'User {uname} deleted.', 'success')
+    subprocess.call("systemctl restart ocserv", shell=True)
     return redirect(url_for('dashboard'))
 
-@app.route('/change_admin', methods=['POST'])
-def change_admin():
+@app.route('/edit_admin', methods=['POST'])
+def edit_admin():
     if 'admin' not in session: return redirect(url_for('login'))
-    old = request.form['oldpass'].strip()
-    new = request.form['newpass'].strip()
-    admin = load_admin()
-    if old == admin['password']:
-        if len(new) == 5 and new[:2].isupper() and new[2:].isdigit():
-            admin['password'] = new
-            save_admin(admin)
-            flash('Password changed.', 'success')
-        else:
-            flash('Password must be 2 capital letters + 3 numbers (eg: AB123)', 'error')
+    new_user = request.form['username'].strip()
+    new_pass = request.form['password'].strip()
+    if new_user and new_pass:
+        save_admin({'username': new_user, 'password': new_pass})
+        flash('Admin info updated!', 'success')
     else:
-        flash('Old password wrong', 'error')
+        flash('Both fields required.', 'error')
     return redirect(url_for('dashboard'))
 
 @app.route('/logout', methods=['POST'])
@@ -351,6 +380,7 @@ def logout():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=PANEL_PORT)
+
 EOF
 
 cat > /usr/local/bin/get_admin_info <<EOF
