@@ -2,19 +2,81 @@
 set -e
 
 PANEL_PORT=8080
+VPN_PORT=4443
 PANEL_DIR="/opt/ocserv-admin"
 ADMIN_USER="admin"
 ADMIN_PASS=$(tr -dc 'A-Z' </dev/urandom | head -c2)$(tr -dc '0-9' </dev/urandom | head -c3)
 ADMIN_INFO="$PANEL_DIR/admin.json"
 CSV_FILE="/root/vpn_users.csv"
 USER_FILE="/etc/ocserv/ocpasswd"
+CERT_DIR="/etc/ocserv/certs"
+SOCKET_FILE="/run/ocserv.socket"
 
 echo "[*] Installing dependencies..."
 apt update
-apt install -y python3 python3-pip python3-venv ocserv curl
+apt install -y python3 python3-pip python3-venv ocserv curl openssl pwgen iproute2
 
+# VPN SERVER CONFIGURATION
+echo "[*] Configuring ocserv VPN on port $VPN_PORT..."
+
+# Self-signed cert (skip if exists)
+mkdir -p $CERT_DIR
+if [ ! -f "$CERT_DIR/server.crt" ]; then
+  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.crt" \
+    -subj "/C=US/ST=NA/L=NA/O=NA/CN=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')"
+fi
+
+# Create ocserv.conf with all required options
+cat >/etc/ocserv/ocserv.conf <<EOF
+auth = "plain[/etc/ocserv/ocpasswd]"
+tcp-port = $VPN_PORT
+udp-port = $VPN_PORT
+server-cert = $CERT_DIR/server.crt
+server-key = $CERT_DIR/server.key
+socket-file = $SOCKET_FILE
+device = vpns
+max-clients = 6000
+max-same-clients = 1
+default-domain = vpn
+ipv4-network = 192.168.150.0/24
+dns = 8.8.8.8
+dns = 1.1.1.1
+EOF
+
+# Open VPN firewall
+echo "[*] Opening firewall for VPN port $VPN_PORT..."
+if command -v ufw &>/dev/null; then
+    ufw allow $VPN_PORT/tcp || true
+    ufw allow $VPN_PORT/udp || true
+    ufw reload || true
+else
+    iptables -I INPUT -p tcp --dport $VPN_PORT -j ACCEPT || true
+    iptables -I INPUT -p udp --dport $VPN_PORT -j ACCEPT || true
+fi
+
+# Enable IP forwarding and NAT (for VPN internet access)
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ocserv-forward.conf
+sysctl -w net.ipv4.ip_forward=1
+IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o "$IFACE" -j MASQUERADE || true
+
+# Save iptables rule (persistent)
+apt-get install -y iptables-persistent
+netfilter-persistent save
+
+# User database file setup
+touch "$USER_FILE"
+chmod 600 "$USER_FILE"
+
+# Ensure VPN users CSV file
+if [ ! -f "$CSV_FILE" ]; then
+    echo "username,password" > "$CSV_FILE"
+fi
+chmod 666 "$CSV_FILE"
+
+# Flask Admin Panel Installation
 mkdir -p $PANEL_DIR
-
 cd $PANEL_DIR
 python3 -m venv venv
 source venv/bin/activate
@@ -31,12 +93,7 @@ cat > $PANEL_DIR/requirements.txt <<EOF
 flask
 EOF
 
-# --- FIX: Always create CSV with header if missing ---
-if [ ! -f "$CSV_FILE" ]; then
-    echo "username,password" > "$CSV_FILE"
-fi
-chmod 666 "$CSV_FILE"
-
+# (Flask app.py code: use the previous full app.py given above)
 cat > $PANEL_DIR/app.py <<"EOF"
 import os, json, subprocess, csv, socket
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
@@ -309,7 +366,7 @@ Admin pass: $ADMIN_PASS
 Recover admin: sudo get_admin_info
 EOF
 
-# systemd service
+# systemd service for admin panel
 cat > /etc/systemd/system/ocserv-admin.service <<EOF
 [Unit]
 Description=OpenConnect Admin Panel
@@ -326,13 +383,16 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+systemctl enable --now ocserv
+systemctl restart ocserv
 systemctl enable --now ocserv-admin
-sudo systemctl restart ocserv-admin
+systemctl restart ocserv-admin
 
 IP=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')
 echo "========================================="
-echo "✅ OpenConnect Admin Panel Installed!"
-echo "URL: http://$IP:8080"
+echo "✅ OpenConnect VPN Server + Admin Panel Installed!"
+echo "Admin Panel: http://$IP:8080"
+echo "VPN Connect to: $IP:4443"
 echo "Admin Username: $ADMIN_USER"
 echo "Admin Password: $ADMIN_PASS"
 echo "Recover admin: sudo get_admin_info"
