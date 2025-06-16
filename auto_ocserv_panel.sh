@@ -281,6 +281,9 @@ EOF
 systemctl daemon-reload
 systemctl enable --now ocserv-admin
 
+# Add this line for guaranteed fresh start:
+sudo systemctl restart ocserv-admin
+
 IP=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')
 echo "========================================="
 echo "✅ OpenConnect Admin Panel Installed!"
