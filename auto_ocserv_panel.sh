@@ -168,7 +168,8 @@ def dashboard():
     users = get_users()
     admin = load_admin()
     server_ip = get_ip()
-    panel_port = VPN_PORT
+    panel_port = PANEL_PORT  # show admin panel port for admin
+    vpn_port = 4443          # real VPN port for users
     edit = request.args.get('edit') == '1'
     return render_template_string('''
     <html>
@@ -183,7 +184,7 @@ def dashboard():
         .header {font-size:2.1em; color:#fff; font-weight:900; letter-spacing:-1px; margin-bottom:24px; text-align:center;}
         .card {background:#fff; border-radius:18px; box-shadow:0 6px 32px #0002; margin-bottom:21px; padding:22px 18px; display:flex; flex-direction:column;}
         .row {display:flex;align-items:center;gap:14px;margin-bottom:10px;}
-        .icon-btn {background:#edf3fd;border-radius:9px;border:0;padding:8px 11px;cursor:pointer;font-size:1.35em;vertical-align:middle;display:inline-flex;align-items:center;}
+        .icon-btn {background:#edf3fd;border-radius:9px;border:0;padding:8px 11px;cursor:pointer;font-size:1.35em;vertical-align:middle;display:inline-flex;align-items:center;position:relative;}
         .icon-btn:active{background:#cbe0fc;}
         .ip-port {font-size:1.13em; color:#2263db; font-weight:800;}
         .adduser-input {flex:1;}
@@ -201,7 +202,7 @@ def dashboard():
         .panel-info {color:#115; font-size:1.01em;}
         .copy-cmd-box {display:flex;align-items:center;gap:10px;margin-top:6px;}
         .copy-cmd-inp {flex:1; font-size:1em; padding:8px 9px; border-radius:8px; border:1px solid #cce;}
-        .copy-cmd-icon {background:#edf3fd;border-radius:8px;border:0;padding:8px 11px;cursor:pointer;font-size:1.35em;vertical-align:middle;display:inline-flex;align-items:center;}
+        .copy-cmd-icon {background:#edf3fd;border-radius:8px;border:0;padding:8px 11px;cursor:pointer;font-size:1.35em;vertical-align:middle;display:inline-flex;align-items:center;position:relative;}
         .copy-cmd-icon:active{background:#cbe0fc;}
         .save-btn {margin-top:12px;width:100%;background:linear-gradient(90deg,#3579f8,#43e3c1); color:#fff; border:0; border-radius:9px; font-size:1.09em; font-weight:700; padding:13px;}
         .save-btn:active {filter:brightness(.97);}
@@ -218,28 +219,27 @@ def dashboard():
       <div class="card">
         <div class="row">
           <span class="ip-port">Server IP:</span>
-          <span>{{server_ip}}</span>
-          <button class="icon-btn" onclick="copyText('{{server_ip}}')" title="Copy IP"><span class="material-icons">content_copy</span></button>
+          <span class="to-copy">{{server_ip}}</span>
+          <button class="icon-btn" title="Copy IP"><span class="material-icons">content_copy</span></button>
         </div>
         <div class="row">
           <span class="ip-port">VPN Port:</span>
-          <span>{{panel_port}}</span>
-          <button class="icon-btn" onclick="copyText('{{panel_port}}')" title="Copy Port"><span class="material-icons">content_copy</span></button>
+          <span class="to-copy">{{vpn_port}}</span>
+          <button class="icon-btn" title="Copy Port"><span class="material-icons">content_copy</span></button>
         </div>
       </div>
 
       <!-- Card 2: Add User -->
-<div class="card">
-  <div style="font-weight:700; font-size:1.13em; margin-bottom:16px;">Add New User</div>
-  <form method="post" action="{{ url_for('add_user') }}" style="display:flex; flex-direction:column; gap:12px;">
-    <input class="adduser-input" name="username" placeholder="Username" required minlength=2 style="width:100%;"/>
-    <input class="adduser-input" name="password" placeholder="Password" required minlength=3 style="width:100%;"/>
-    <button type="submit" style="width:100%;background:linear-gradient(90deg,#3579f8,#43e3c1);color:#fff;border:0;border-radius:9px;font-size:1.12em;font-weight:700;padding:14px;margin-top:8px;transition:.15s;">
-      Add User
-    </button>
-  </form>
-</div>
-
+      <div class="card">
+        <div style="font-weight:700; font-size:1.13em; margin-bottom:16px;">Add New User</div>
+        <form method="post" action="{{ url_for('add_user') }}" style="display:flex; flex-direction:column; gap:12px;">
+          <input class="adduser-input" name="username" placeholder="Username" required minlength=2 style="width:100%;"/>
+          <input class="adduser-input" name="password" placeholder="Password" required minlength=3 style="width:100%;"/>
+          <button type="submit" style="width:100%;background:linear-gradient(90deg,#3579f8,#43e3c1);color:#fff;border:0;border-radius:9px;font-size:1.12em;font-weight:700;padding:14px;margin-top:8px;transition:.15s;">
+            Add User
+          </button>
+        </form>
+      </div>
 
       <!-- Card 3: Users List -->
       <div class="card">
@@ -292,7 +292,7 @@ def dashboard():
           <b>Recover admin:</b>
           <div class="copy-cmd-box">
             <input class="copy-cmd-inp" id="cmdinp" value="sudo get_admin_info" readonly>
-            <button class="copy-cmd-icon" onclick="copyCmd()" title="Copy Command"><span class="material-icons">content_copy</span></button>
+            <button class="copy-cmd-icon" title="Copy Command"><span class="material-icons">content_copy</span></button>
           </div>
         </div>
       </div>
@@ -306,48 +306,46 @@ def dashboard():
       </form>
     </div>
     <script>
-  // Show "Copied!" floating tooltip
-  function showCopiedTooltip(btn) {
-    let tip = document.createElement('span');
-    tip.textContent = 'Copied!';
-    tip.style.position = 'absolute';
-    tip.style.background = '#22c55e';
-    tip.style.color = '#fff';
-    tip.style.padding = '3px 12px';
-    tip.style.borderRadius = '8px';
-    tip.style.fontWeight = '700';
-    tip.style.fontSize = '0.97em';
-    tip.style.left = '50%';
-    tip.style.top = '-28px';
-    tip.style.transform = 'translateX(-50%)';
-    tip.style.boxShadow = '0 1px 7px #0003';
-    tip.style.zIndex = '1000';
-    btn.style.position = 'relative';
-    btn.appendChild(tip);
-    setTimeout(() => { btn.removeChild(tip); }, 1000);
-  }
-
-  // Attach clipboard copy to all .icon-btn and .copy-cmd-icon
-  document.addEventListener('DOMContentLoaded', function () {
-    document.querySelectorAll('.icon-btn, .copy-cmd-icon').forEach(function(btn){
-      btn.addEventListener('click', function(ev){
-        ev.preventDefault();
-        let toCopy = btn.closest('.row')?.querySelector('span:not(.ip-port)')?.textContent
-                  || btn.closest('.copy-cmd-box')?.querySelector('input')?.value
-                  || btn.getAttribute('data-copy');
-        if (toCopy) {
-          navigator.clipboard.writeText(toCopy).then(function(){
-            showCopiedTooltip(btn);
+      // Show "Copied!" floating tooltip
+      function showCopiedTooltip(btn) {
+        let tip = document.createElement('span');
+        tip.textContent = 'Copied!';
+        tip.style.position = 'absolute';
+        tip.style.background = '#22c55e';
+        tip.style.color = '#fff';
+        tip.style.padding = '3px 12px';
+        tip.style.borderRadius = '8px';
+        tip.style.fontWeight = '700';
+        tip.style.fontSize = '0.97em';
+        tip.style.left = '50%';
+        tip.style.top = '-28px';
+        tip.style.transform = 'translateX(-50%)';
+        tip.style.boxShadow = '0 1px 7px #0003';
+        tip.style.zIndex = '1000';
+        btn.style.position = 'relative';
+        btn.appendChild(tip);
+        setTimeout(() => { btn.removeChild(tip); }, 1000);
+      }
+      // Attach clipboard copy to all .icon-btn and .copy-cmd-icon
+      document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.icon-btn, .copy-cmd-icon').forEach(function(btn){
+          btn.addEventListener('click', function(ev){
+            ev.preventDefault();
+            let toCopy = btn.closest('.row')?.querySelector('span.to-copy')?.textContent
+                      || btn.closest('.copy-cmd-box')?.querySelector('input')?.value
+                      || btn.getAttribute('data-copy');
+            if (toCopy) {
+              navigator.clipboard.writeText(toCopy).then(function(){
+                showCopiedTooltip(btn);
+              });
+            }
           });
-        }
+        });
       });
-    });
-  });
-</script>
-
+    </script>
     </body>
     </html>
-    ''', users=users, admin=admin, server_ip=server_ip, panel_port=panel_port, MAX_USERS=MAX_USERS, edit=edit)
+    ''', users=users, admin=admin, server_ip=server_ip, panel_port=panel_port, vpn_port=vpn_port, MAX_USERS=MAX_USERS, edit=edit)
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
@@ -412,6 +410,7 @@ def logout():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=PANEL_PORT)
+
 
 EOF
 
