@@ -26,7 +26,6 @@ if [ ! -f "$CERT_DIR/server.crt" ]; then
     -subj "/C=US/ST=NA/L=NA/O=NA/CN=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')"
 fi
 
-# Create ocserv.conf
 cat >/etc/ocserv/ocserv.conf <<EOF
 auth = "plain[/etc/ocserv/ocpasswd]"
 tcp-port = $VPN_PORT
@@ -42,22 +41,28 @@ dns = 8.8.8.8
 dns = 1.1.1.1
 EOF
 
-# Open VPN firewall
 echo "[*] Opening firewall for VPN port $VPN_PORT..."
 if command -v ufw &>/dev/null; then
     ufw allow $VPN_PORT/tcp || true
     ufw allow $VPN_PORT/udp || true
+    ufw allow OpenSSH || true
     ufw reload || true
 else
     iptables -I INPUT -p tcp --dport $VPN_PORT -j ACCEPT || true
     iptables -I INPUT -p udp --dport $VPN_PORT -j ACCEPT || true
+    iptables -I INPUT -p tcp --dport 22 -j ACCEPT || true
 fi
 
-# Enable IP forwarding and NAT (for VPN internet access)
+# --- NAT & Forwarding for working internet ---
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ocserv-forward.conf
 sysctl -w net.ipv4.ip_forward=1
+
 IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o "$IFACE" -j MASQUERADE || true
+
+# Accept VPN forwarding in FORWARD chain
+iptables -I FORWARD -s 192.168.150.0/24 -j ACCEPT || true
+iptables -I FORWARD -d 192.168.150.0/24 -j ACCEPT || true
 
 netfilter-persistent save
 
@@ -95,6 +100,7 @@ ADMIN_INFO = '/opt/ocserv-admin/admin.json'
 CSV_FILE = '/root/vpn_users.csv'
 USER_FILE = '/etc/ocserv/ocpasswd'
 PANEL_PORT = 8080
+VPN_PORT = 4443
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -150,6 +156,19 @@ def delete_user_csv(username):
         writer = csv.writer(f)
         writer.writerows(rows)
 
+def delete_all_users():
+    with open(CSV_FILE) as f:
+        rows = [row for row in csv.reader(f)]
+    # Keep header only
+    with open(CSV_FILE, 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['username','password'])
+    # Delete from ocpasswd
+    for row in rows:
+        if row and row[0] not in ('username', ''):
+            subprocess.call(f"ocpasswd -d {row[0]}", shell=True)
+    subprocess.call("systemctl restart ocserv", shell=True)
+
 @app.route('/', methods=['GET', 'POST'])
 def login():
     if 'admin' in session: return redirect(url_for('dashboard'))
@@ -191,7 +210,6 @@ def dashboard():
     users = get_users()
     admin = load_admin()
     server_ip = get_ip()
-    panel_port = PANEL_PORT
     messages = []
     for cat,msg in list(getattr(session, '_flashes', []) or []):
         messages.append((cat,msg))
@@ -256,7 +274,7 @@ def dashboard():
           <div class="field"><b>Server IP</b>: <span id="clip-ip">{{server_ip}}</span>
             <button class="copybtn" id="btn-clip-ip" onclick="copyText('clip-ip')" title="Copy IP">📋</button>
           </div>
-          <div class="field"><b>Port</b>: <span id="clip-port">{{panel_port}}</span>
+          <div class="field"><b>VPN Port</b>: <span id="clip-port">{{vpn_port}}</span>
             <button class="copybtn" id="btn-clip-port" onclick="copyText('clip-port')" title="Copy Port">📋</button>
           </div>
         </div>
@@ -271,6 +289,9 @@ def dashboard():
       </div>
       <div class="card">
         <b style="font-size:1.12em;">All Users</b>
+        <form method="post" action="/del_all_users" onsubmit="return confirm('Delete all VPN users? This cannot be undone!')" style="float:right;">
+          <button class="delbtn btn" style="padding:5px 13px;margin-bottom:7px;">Delete All</button>
+        </form>
         <table>
           <tr><th>Username</th><th>Password</th><th>Copy</th><th>Delete</th></tr>
           {% for user in users %}
@@ -306,7 +327,7 @@ def dashboard():
       </div>
     </body>
     </html>
-    ''', users=users, admin=admin, server_ip=server_ip, panel_port=panel_port, messages=messages)
+    ''', users=users, admin=admin, server_ip=server_ip, vpn_port=VPN_PORT, messages=messages)
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
@@ -334,6 +355,13 @@ def del_user():
         delete_user_csv(uname)
         flash(f'User {uname} deleted.', 'success')
         subprocess.call("systemctl restart ocserv", shell=True)
+    return redirect(url_for('dashboard'))
+
+@app.route('/del_all_users', methods=['POST'])
+def del_all_users():
+    if 'admin' not in session: return redirect(url_for('login'))
+    delete_all_users()
+    flash('All VPN users deleted.', 'success')
     return redirect(url_for('dashboard'))
 
 @app.route('/change_admin', methods=['POST'])
@@ -376,7 +404,6 @@ Admin pass: $ADMIN_PASS
 Recover admin: sudo get_admin_info
 EOF
 
-# systemd service for admin panel
 cat > /etc/systemd/system/ocserv-admin.service <<EOF
 [Unit]
 Description=OpenConnect Admin Panel
@@ -402,7 +429,7 @@ IP=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')
 echo "========================================="
 echo "✅ OpenConnect VPN Server + Admin Panel Installed!"
 echo "Admin Panel: http://$IP:8080"
-echo "VPN Connect to: $IP:4443"
+echo "VPN Connect to: $IP:$VPN_PORT"
 echo "Admin Username: $ADMIN_USER"
 echo "Admin Password: $ADMIN_PASS"
 echo "Recover admin: sudo get_admin_info"
