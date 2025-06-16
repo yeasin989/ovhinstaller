@@ -168,7 +168,7 @@ def dashboard():
     users = get_users()
     admin = load_admin()
     server_ip = get_ip()
-    panel_port = PANEL_PORT
+    panel_port = VPN_PORT
     edit = request.args.get('edit') == '1'
     return render_template_string('''
     <html>
