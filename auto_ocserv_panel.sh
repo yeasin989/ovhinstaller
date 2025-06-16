@@ -19,6 +19,7 @@ apt install -y python3 python3-pip python3-venv ocserv curl openssl pwgen iprout
 # VPN SERVER CONFIGURATION
 echo "[*] Configuring ocserv VPN on port $VPN_PORT..."
 
+# Self-signed cert (skip if exists)
 mkdir -p $CERT_DIR
 if [ ! -f "$CERT_DIR/server.crt" ]; then
   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -26,6 +27,7 @@ if [ ! -f "$CERT_DIR/server.crt" ]; then
     -subj "/C=US/ST=NA/L=NA/O=NA/CN=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')"
 fi
 
+# Create ocserv.conf with all required options (***ONE SETTING PER LINE!***)
 cat >/etc/ocserv/ocserv.conf <<EOF
 auth = "plain[/etc/ocserv/ocpasswd]"
 tcp-port = $VPN_PORT
@@ -42,6 +44,7 @@ dns = 8.8.8.8
 dns = 1.1.1.1
 EOF
 
+# Open VPN firewall
 echo "[*] Opening firewall for VPN port $VPN_PORT..."
 if command -v ufw &>/dev/null; then
     ufw allow $VPN_PORT/tcp || true
@@ -52,20 +55,26 @@ else
     iptables -I INPUT -p udp --dport $VPN_PORT -j ACCEPT || true
 fi
 
+# Enable IP forwarding and NAT (for VPN internet access)
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ocserv-forward.conf
 sysctl -w net.ipv4.ip_forward=1
 IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o "$IFACE" -j MASQUERADE || true
+
+# Save iptables rule (persistent)
 netfilter-persistent save
 
+# User database file setup
 touch "$USER_FILE"
 chmod 600 "$USER_FILE"
 
+# Ensure VPN users CSV file
 if [ ! -f "$CSV_FILE" ]; then
     echo "username,password" > "$CSV_FILE"
 fi
 chmod 666 "$CSV_FILE"
 
+# Flask Admin Panel Installation
 mkdir -p $PANEL_DIR
 cd $PANEL_DIR
 python3 -m venv venv
@@ -83,6 +92,7 @@ cat > $PANEL_DIR/requirements.txt <<EOF
 flask
 EOF
 
+# Flask app.py
 cat > $PANEL_DIR/app.py <<"EOF"
 import os, json, subprocess, csv, socket
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
@@ -94,7 +104,7 @@ MAX_USERS = 6000
 PANEL_PORT = 8080
 
 app = Flask(__name__)
-app.secret_key = 'this_is_a_constant_super_secret_key__change_for_prod_2024'  # keep constant for reliable sessions
+app.secret_key = os.urandom(24)
 
 def get_ip():
     try:
@@ -121,82 +131,176 @@ def get_users():
                 if len(row) >= 2:
                     users.append({'username': row[0], 'password': row[1]})
     return users
+def get_connected():
+    try:
+        out = subprocess.check_output("occtl show users | grep Username | awk '{print $2}'", shell=True)
+        names = out.decode().split()
+        return len(names), names
+    except:
+        return 0, []
+
+def add_user_csv(username, password):
+    exists = False
+    users = []
+    with open(CSV_FILE) as f:
+        for row in csv.reader(f):
+            if row and row[0] == username:
+                exists = True
+            users.append(row)
+    if not exists:
+        with open(CSV_FILE, 'a') as f:
+            f.write(f"{username},{password}\n")
+    return not exists
+
+def delete_user_csv(username):
+    if not os.path.exists(CSV_FILE): return
+    rows = []
+    with open(CSV_FILE) as f:
+        for row in csv.reader(f):
+            if row and row[0] == 'username':
+                rows.append(row)
+            elif row and row[0] != username:
+                rows.append(row)
+    with open(CSV_FILE, 'w') as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
 
 @app.route('/', methods=['GET', 'POST'])
 def login():
-    if session.get('admin'):
-        return redirect(url_for('dashboard'))
+    if 'admin' in session: return redirect(url_for('dashboard'))
     if request.method == 'POST':
         creds = load_admin()
         if request.form['username'] == creds['username'] and request.form['password'] == creds['password']:
             session['admin'] = True
-            return redirect(url_for('dashboard'))  # always relative, always safe
+            return redirect(url_for('dashboard'))
         flash('Login failed.', 'error')
     return render_template_string('''
-    <html>
-    <head>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>OpenConnect Admin Login</title>
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@700;900&display=swap" rel="stylesheet">
-      <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-      <style>
-        body {background: linear-gradient(120deg, #232e47 0%, #447cfb 100%); min-height:100vh; font-family: 'Inter',sans-serif; margin:0;}
-        .login-card {max-width:380px; margin:80px auto; background:#fff; border-radius:20px; box-shadow:0 8px 32px #0002; padding:36px 28px;}
-        h2 {margin:0 0 20px 0; color:#2354be; font-size:2em; font-weight:900;}
-        input {width:100%; padding:15px; border-radius:9px; border:1px solid #bcd; margin-bottom:16px; font-size:1.1em;}
-        button {width:100%; background:linear-gradient(90deg,#3579f8,#43e3c1); color:#fff; border:0; border-radius:9px; font-size:1.12em; font-weight:700; padding:14px; transition:.15s;}
-        button:hover {filter:brightness(.97);}
-        .toast {color:#e9435b; font-weight:700; margin-top:12px;}
-        @media(max-width:600px) {.login-card{padding:18px 8px;}}
-      </style>
-    </head>
-    <body>
-      <form class="login-card" method=post>
-        <h2>OpenConnect<br>Admin</h2>
+    <html><head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VPN Admin Login</title>
+    <style>
+    body{background:#191f2a;font-family:sans-serif;}
+    .login{max-width:350px;margin:80px auto;background:#fff;border-radius:14px;padding:32px;box-shadow:0 6px 24px #0002;}
+    h2{margin-top:0;color:#1e2b48;}
+    input{margin-bottom:12px;width:100%;padding:12px;border-radius:6px;border:1px solid #c4c4c4;}
+    button{width:100%;padding:12px;border:0;border-radius:6px;background:#1e89e7;color:#fff;font-weight:bold;font-size:1.1em;}
+    .toast{color:red;margin-top:10px;text-align:center;}
+    @media(max-width:600px){.login{padding:18px;}}
+    </style>
+    </head><body>
+      <form class="login" method=post>
+        <h2>VPN Admin Login</h2>
         <input name=username placeholder="admin" required>
         <input name=password type=password placeholder="password" required>
         <button>Login</button>
         <div class="toast">{% with messages = get_flashed_messages(with_categories=true) %}
             {% for cat,msg in messages %}{% if cat=='error' %}{{msg}}{% endif %}{% endfor %}{% endwith %}</div>
       </form>
-    </body>
-    </html>
+    </body></html>
     ''')
 
-@app.route('/dashboard', methods=['GET', 'POST'])
+@app.route('/dashboard')
 def dashboard():
-    if not session.get('admin'):
-        return redirect(url_for('login'))
+    if 'admin' not in session: return redirect(url_for('login'))
     users = get_users()
+    connected_count, connected_users = get_connected()
     admin = load_admin()
     server_ip = get_ip()
     panel_port = PANEL_PORT
-    vpn_port = 4443
-    edit = request.args.get('edit') == '1'
+    messages = []
+    for cat,msg in list(getattr(session, '_flashes', []) or []):
+        messages.append((cat,msg))
+    session._flashes = []
     return render_template_string('''
-    <!-- (identical template as previously, omitted for brevity) -->
-    <!-- Use previous template for dashboard page, same as above, or request "full code" if you want copy/paste ready -->
-    ''', users=users, admin=admin, server_ip=server_ip, panel_port=panel_port, vpn_port=vpn_port, MAX_USERS=MAX_USERS, edit=edit)
+    <html><head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VPN Admin Panel</title>
+    <style>
+    body{background:#f6f8fa;font-family:sans-serif;margin:0;}
+    .card{background:#fff;padding:24px 18px;border-radius:18px;box-shadow:0 4px 32px #0002;max-width:540px;margin:30px auto;}
+    .row{display:flex;gap:22px;flex-wrap:wrap;}
+    h2{color:#1e2b48;margin-bottom:12px;}
+    input,select{padding:8px 8px;border-radius:6px;border:1px solid #ccd;}
+    button{background:#1e89e7;color:#fff;border:0;padding:8px 20px;border-radius:6px;font-weight:bold;margin-left:4px;}
+    .logout{position:absolute;top:16px;right:24px;}
+    table{width:100%;margin:12px 0 0 0;border-collapse:collapse;}
+    th,td{padding:9px 4px;text-align:left;}
+    tr:nth-child(even){background:#f4f6fa;}
+    th{background:#e7e9f0;}
+    .delbtn{background:#e9435b;}
+    .toast{padding:10px;text-align:center;border-radius:8px;font-size:1.08em;margin-bottom:10px;}
+    .success{background:#b0faad;color:#20621d;}
+    .error{background:#ffd3d3;color:#b93333;}
+    .info{background:#e4f1fd;color:#2271b3;}
+    @media (max-width:650px){.card{padding:10px;}.row{flex-direction:column;}}
+    </style>
+    </head>
+    <body>
+      <form method="post" action="/logout"><button class="logout">Logout</button></form>
+      <div class="card">
+      <h2>OpenConnect VPN Admin Panel</h2>
+      <div style="margin-bottom:12px;">
+        <b>Server IP:</b> <code>{{server_ip}}:{{panel_port}}</code>
+      </div>
+      {% for cat,msg in messages %}
+        <div class="toast {{cat}}">{{msg}}</div>
+      {% endfor %}
+      <div class="row" style="margin-bottom:12px;">
+        <div><b>Connected users:</b> {{connected_count}} / {{max_users}}</div>
+        <div><b>Now connected:</b> {% for u in connected_users %} <code>{{u}}</code> {% endfor %}</div>
+      </div>
+      <div class="row" style="margin-bottom:15px;">
+        <b>Add VPN User:</b>
+        <form method="post" action="/add_user" style="display:flex;gap:6px;">
+          <input name="username" placeholder="username" required minlength=2>
+          <input name="password" placeholder="password" required minlength=3>
+          <button>Add</button>
+        </form>
+      </div>
+      <b>All Users:</b>
+      <table>
+        <tr><th>Username</th><th>Password</th><th>Delete</th></tr>
+        {% for user in users %}
+        <tr>
+          <td>{{user.username}}</td>
+          <td>{{user.password}}</td>
+          <td>
+            <form method="post" action="/del_user" style="display:inline;">
+              <input type="hidden" name="username" value="{{user.username}}">
+              <button class="delbtn">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      <div style="margin-top:18px;">
+        <b>Change Admin Password:</b>
+        <form method="post" action="/change_admin" style="display:flex;gap:5px;">
+          <input name="oldpass" type="password" placeholder="Old (5 chars)" required minlength=5 maxlength=5>
+          <input name="newpass" type="password" placeholder="New (2UC+3NUM)" required minlength=5 maxlength=5>
+          <button>Change</button>
+        </form>
+      </div>
+      <div style="margin-top:16px;font-size:.92em;color:#888;">
+        <b>Panel:</b> {{admin.username}} <br>
+        Max Users: <b>{{max_users}}</b> (fixed) <br>
+        To recover admin: <code>sudo get_admin_info</code>
+      </div>
+      </div>
+    </body></html>
+    ''', users=users, connected_count=connected_count, connected_users=connected_users, max_users=MAX_USERS, admin=admin, server_ip=server_ip, panel_port=panel_port, messages=messages)
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
-    if not session.get('admin'):
-        return redirect(url_for('login'))
+    if 'admin' not in session: return redirect(url_for('login'))
     uname = request.form['username'].strip()
     pword = request.form['password'].strip()
     if not uname or not pword:
         flash('Username and password required.', 'error')
         return redirect(url_for('dashboard'))
     subprocess.call(f"echo '{pword}\n{pword}' | ocpasswd -g default {uname}", shell=True)
-    exists = False
-    if os.path.exists(CSV_FILE):
-        with open(CSV_FILE) as f:
-            for row in csv.reader(f):
-                if row and row[0] == uname:
-                    exists = True
-    if not exists:
-        with open(CSV_FILE, 'a') as f:
-            f.write(f"{uname},{pword}\n")
+    added = add_user_csv(uname, pword)
+    if added:
         flash('User added!', 'success')
         subprocess.call("systemctl restart ocserv", shell=True)
     else:
@@ -205,36 +309,30 @@ def add_user():
 
 @app.route('/del_user', methods=['POST'])
 def del_user():
-    if not session.get('admin'):
-        return redirect(url_for('login'))
+    if 'admin' not in session: return redirect(url_for('login'))
     uname = request.form['username']
-    subprocess.call(f"ocpasswd -d {uname}", shell=True)
-    # Remove from CSV
-    rows = []
-    if os.path.exists(CSV_FILE):
-        with open(CSV_FILE) as f:
-            for row in csv.reader(f):
-                if row and row[0] != uname and row[0] != "username":
-                    rows.append(row)
-        with open(CSV_FILE, 'w') as f:
-            writer = csv.writer(f)
-            writer.writerow(["username", "password"])
-            writer.writerows(rows)
-    flash(f'User {uname} deleted.', 'success')
-    subprocess.call("systemctl restart ocserv", shell=True)
+    if uname:
+        subprocess.call(f"ocpasswd -d {uname}", shell=True)
+        delete_user_csv(uname)
+        flash(f'User {uname} deleted.', 'success')
+        subprocess.call("systemctl restart ocserv", shell=True)
     return redirect(url_for('dashboard'))
 
-@app.route('/edit_admin', methods=['POST'])
-def edit_admin():
-    if not session.get('admin'):
-        return redirect(url_for('login'))
-    new_user = request.form['username'].strip()
-    new_pass = request.form['password'].strip()
-    if new_user and new_pass:
-        save_admin({'username': new_user, 'password': new_pass})
-        flash('Admin info updated!', 'success')
+@app.route('/change_admin', methods=['POST'])
+def change_admin():
+    if 'admin' not in session: return redirect(url_for('login'))
+    old = request.form['oldpass'].strip()
+    new = request.form['newpass'].strip()
+    admin = load_admin()
+    if old == admin['password']:
+        if len(new) == 5 and new[:2].isupper() and new[2:].isdigit():
+            admin['password'] = new
+            save_admin(admin)
+            flash('Password changed.', 'success')
+        else:
+            flash('Password must be 2 capital letters + 3 numbers (eg: AB123)', 'error')
     else:
-        flash('Both fields required.', 'error')
+        flash('Old password wrong', 'error')
     return redirect(url_for('dashboard'))
 
 @app.route('/logout', methods=['POST'])
@@ -244,11 +342,9 @@ def logout():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=PANEL_PORT)
-
-
-
 EOF
 
+# admin info recovery CLI
 cat > /usr/local/bin/get_admin_info <<EOF
 #!/bin/bash
 cat $ADMIN_INFO
@@ -262,6 +358,7 @@ Admin pass: $ADMIN_PASS
 Recover admin: sudo get_admin_info
 EOF
 
+# systemd service for admin panel
 cat > /etc/systemd/system/ocserv-admin.service <<EOF
 [Unit]
 Description=OpenConnect Admin Panel
