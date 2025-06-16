@@ -17,7 +17,7 @@ echo "[*] Installing dependencies..."
 apt update
 apt install -y python3 python3-pip python3-venv ocserv curl openssl pwgen iproute2 iptables-persistent
 
-# --- Generate certificates if needed ---
+# --- Configure Certificates and ocserv ---
 echo "[*] Configuring ocserv VPN on port $VPN_PORT..."
 mkdir -p $CERT_DIR
 if [ ! -f "$CERT_DIR/server.crt" ]; then
@@ -26,7 +26,6 @@ if [ ! -f "$CERT_DIR/server.crt" ]; then
     -subj "/C=US/ST=NA/L=NA/O=NA/CN=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')"
 fi
 
-# --- Write ocserv configuration ---
 cat >/etc/ocserv/ocserv.conf <<EOF
 auth = "plain[/etc/ocserv/ocpasswd]"
 tcp-port = $VPN_PORT
@@ -44,7 +43,7 @@ dns = 8.8.8.8
 dns = 1.1.1.1
 EOF
 
-# --- Firewall rules ---
+# --- Firewall and NAT ---
 echo "[*] Opening firewall for VPN port $VPN_PORT..."
 if command -v ufw &>/dev/null; then
     ufw allow $VPN_PORT/tcp || true
@@ -55,14 +54,13 @@ else
     iptables -I INPUT -p udp --dport $VPN_PORT -j ACCEPT || true
 fi
 
-# --- Enable IP forwarding & NAT ---
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ocserv-forward.conf
 sysctl -w net.ipv4.ip_forward=1
 IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o "$IFACE" -j MASQUERADE || true
 netfilter-persistent save
 
-# --- User database & CSV setup ---
+# --- User DB and CSV ---
 touch "$USER_FILE"; chmod 600 "$USER_FILE"
 if [ ! -f "$CSV_FILE" ]; then echo "username,password" > "$CSV_FILE"; fi
 chmod 666 "$CSV_FILE"
@@ -74,7 +72,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install flask
 
-# Create admin credentials file
+# Admin creds
 cat > $ADMIN_INFO <<EOF
 {
     "username": "$ADMIN_USER",
@@ -82,12 +80,11 @@ cat > $ADMIN_INFO <<EOF
 }
 EOF
 
-# Write requirements
 cat > $PANEL_DIR/requirements.txt <<EOF
 flask
 EOF
 
-# --- Create Flask app with fixed get_connected() ---
+# Fixed Flask app.py
 cat > $PANEL_DIR/app.py <<'EOF'
 import os, json, subprocess, csv, socket
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
@@ -100,6 +97,7 @@ MAX_USERS = 6000
 PANEL_PORT = 8080
 
 app = Flask(__name__)
+app.config['SERVER_NAME'] = None  # ensure relative redirects
 app.secret_key = os.urandom(24)
 
 def get_ip():
@@ -126,33 +124,44 @@ def get_users():
 
 def get_connected():
     try:
-        cmd=f"occtl --socket-file {SOCKET} show users"
-        out=subprocess.check_output(cmd, shell=True)
-        names=[l.split()[1] for l in out.decode().splitlines() if 'Username' in l]
+        cmd = f"occtl --socket-file {SOCKET} show users"
+        out = subprocess.check_output(cmd, shell=True)
+        names = [l.split()[1] for l in out.decode().splitlines() if 'Username' in l]
         return len(names), names
     except:
         return 0, []
 
-# ... rest of Flask routes unchanged ...
+@app.route('/', methods=['GET','POST'])
+def login():
+    if 'admin' in session:
+        return redirect('/dashboard')  # direct path ensures no external redirect
+    if request.method == 'POST':
+        creds = load_admin()
+        if request.form['username']==creds['username'] and request.form['password']==creds['password']:
+            session['admin']=True
+            return redirect('/dashboard')
+        flash('Login failed.','error')
+    return render_template_string(LOGIN_TEMPLATE)
 
-if __name__ == '__main__':
+# ... rest unchanged ...
+
+if __name__=='__main__':
     app.run(host='0.0.0.0', port=PANEL_PORT)
 EOF
 
-# --- Ensure socket permissions ---
+# Ensure socket perms
 chmod 660 $SOCKET_FILE 2>/dev/null || true
 chown root:root $SOCKET_FILE 2>/dev/null || true
 
-# --- Create recovery CLI ---
+# Admin info CLI
 cat > /usr/local/bin/get_admin_info <<EOF
 #!/bin/bash
 cat $ADMIN_INFO
 EOF
 chmod +x /usr/local/bin/get_admin_info
 
-# --- Systemd service for panel ---
-cat > /etc/systemd/system/ocserv-admin.service <<EOF
-[Unit]
+# Systemd service
+type="[Unit]
 Description=OpenConnect Admin Panel
 After=network.target
 
@@ -163,21 +172,20 @@ ExecStart=$PANEL_DIR/venv/bin/python3 app.py
 Restart=always
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target"
+cat >/etc/systemd/system/ocserv-admin.service <<EOF
+$type
 EOF
 
-# --- Enable and start services ---
 systemctl daemon-reload
-systemctl enable --now ocserv
-systemctl enable --now ocserv-admin
+systemctl enable --now ocserv ocserv-admin
 systemctl restart ocserv ocserv-admin
 
 IP=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')
 echo "========================================="
-echo "✅ OpenConnect VPN + Admin Panel Installed!"
-echo "Admin Panel: http://$IP:8080"
+echo "✅ VPN + Admin Panel Installed!"
+echo "Panel: http://$IP:$PANEL_PORT"
 echo "VPN: $IP:$VPN_PORT"
-echo "Admin User: $ADMIN_USER"
-echo "Admin Pass: $ADMIN_PASS"
-echo "Recover Admin: sudo get_admin_info"
+echo "Admin: $ADMIN_USER / $ADMIN_PASS"
+echo "Recover: sudo get_admin_info"
 echo "========================================="
