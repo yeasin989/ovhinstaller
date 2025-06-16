@@ -31,17 +31,33 @@ cat > $PANEL_DIR/requirements.txt <<EOF
 flask
 EOF
 
+# --- FIX: Always create CSV with header if missing ---
+if [ ! -f "$CSV_FILE" ]; then
+    echo "username,password" > "$CSV_FILE"
+fi
+chmod 666 "$CSV_FILE"
+
 cat > $PANEL_DIR/app.py <<"EOF"
-import os, json, subprocess, csv
+import os, json, subprocess, csv, socket
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
 
 ADMIN_INFO = '/opt/ocserv-admin/admin.json'
 CSV_FILE = '/root/vpn_users.csv'
 USER_FILE = '/etc/ocserv/ocpasswd'
 MAX_USERS = 6000
+PANEL_PORT = 8080
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
+
+def get_ip():
+    try:
+        # Reliable external IP detection
+        import urllib.request
+        ip = urllib.request.urlopen('https://ipv4.icanhazip.com').read().decode().strip()
+        return ip
+    except:
+        return socket.gethostbyname(socket.gethostname())
 
 def load_admin():
     with open(ADMIN_INFO) as f:
@@ -54,8 +70,10 @@ def get_users():
     if os.path.exists(CSV_FILE):
         with open(CSV_FILE) as f:
             reader = csv.reader(f)
-            next(reader, None)
+            # Always skip header row, even if double
             for row in reader:
+                if row and row[0] == 'username':
+                    continue
                 if len(row) >= 2:
                     users.append({'username': row[0], 'password': row[1]})
     return users
@@ -69,12 +87,15 @@ def get_connected():
 
 def add_user_csv(username, password):
     exists = False
-    if os.path.exists(CSV_FILE):
-        with open(CSV_FILE) as f:
-            for row in csv.reader(f):
-                if row and row[0] == username:
-                    exists = True
+    users = []
+    # Read all users, skip header
+    with open(CSV_FILE) as f:
+        for row in csv.reader(f):
+            if row and row[0] == username:
+                exists = True
+            users.append(row)
     if not exists:
+        # Append new user
         with open(CSV_FILE, 'a') as f:
             f.write(f"{username},{password}\n")
     return not exists
@@ -84,11 +105,12 @@ def delete_user_csv(username):
     rows = []
     with open(CSV_FILE) as f:
         for row in csv.reader(f):
-            if row and row[0] != username:
+            if row and row[0] == 'username':
+                rows.append(row)
+            elif row and row[0] != username:
                 rows.append(row)
     with open(CSV_FILE, 'w') as f:
         writer = csv.writer(f)
-        writer.writerow(['username','password'])
         writer.writerows(rows)
 
 @app.route('/', methods=['GET', 'POST'])
@@ -99,7 +121,7 @@ def login():
         if request.form['username'] == creds['username'] and request.form['password'] == creds['password']:
             session['admin'] = True
             return redirect(url_for('dashboard'))
-        flash('Login failed.')
+        flash('Login failed.', 'error')
     return render_template_string('''
     <html><head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -110,6 +132,7 @@ def login():
     h2{margin-top:0;color:#1e2b48;}
     input{margin-bottom:12px;width:100%;padding:12px;border-radius:6px;border:1px solid #c4c4c4;}
     button{width:100%;padding:12px;border:0;border-radius:6px;background:#1e89e7;color:#fff;font-weight:bold;font-size:1.1em;}
+    .toast{color:red;margin-top:10px;text-align:center;}
     @media(max-width:600px){.login{padding:18px;}}
     </style>
     </head><body>
@@ -118,7 +141,8 @@ def login():
         <input name=username placeholder="admin" required>
         <input name=password type=password placeholder="password" required>
         <button>Login</button>
-        <p style="color:red;">{% with messages = get_flashed_messages() %}{% for m in messages %}{{m}}{% endfor %}{% endwith %}</p>
+        <div class="toast">{% with messages = get_flashed_messages(with_categories=true) %}
+            {% for cat,msg in messages %}{% if cat=='error' %}{{msg}}{% endif %}{% endfor %}{% endwith %}</div>
       </form>
     </body></html>
     ''')
@@ -129,6 +153,15 @@ def dashboard():
     users = get_users()
     connected_count, connected_users = get_connected()
     admin = load_admin()
+    server_ip = get_ip()
+    panel_port = PANEL_PORT
+    # get toasts
+    toast = None
+    toast_cat = None
+    messages = []
+    for cat,msg in list(getattr(session, '_flashes', []) or []):
+        messages.append((cat,msg))
+    session._flashes = []
     return render_template_string('''
     <html><head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -146,6 +179,10 @@ def dashboard():
     tr:nth-child(even){background:#f4f6fa;}
     th{background:#e7e9f0;}
     .delbtn{background:#e9435b;}
+    .toast{padding:10px;text-align:center;border-radius:8px;font-size:1.08em;margin-bottom:10px;}
+    .success{background:#b0faad;color:#20621d;}
+    .error{background:#ffd3d3;color:#b93333;}
+    .info{background:#e4f1fd;color:#2271b3;}
     @media (max-width:650px){.card{padding:10px;}.row{flex-direction:column;}}
     </style>
     </head>
@@ -153,6 +190,12 @@ def dashboard():
       <form method="post" action="/logout"><button class="logout">Logout</button></form>
       <div class="card">
       <h2>OpenConnect VPN Admin Panel</h2>
+      <div style="margin-bottom:12px;">
+        <b>Server IP:</b> <code>{{server_ip}}:{{panel_port}}</code>
+      </div>
+      {% for cat,msg in messages %}
+        <div class="toast {{cat}}">{{msg}}</div>
+      {% endfor %}
       <div class="row" style="margin-bottom:12px;">
         <div><b>Connected users:</b> {{connected_count}} / {{max_users}}</div>
         <div><b>Now connected:</b> {% for u in connected_users %} <code>{{u}}</code> {% endfor %}</div>
@@ -188,9 +231,6 @@ def dashboard():
           <input name="newpass" type="password" placeholder="New (2UC+3NUM)" required minlength=5 maxlength=5>
           <button>Change</button>
         </form>
-        <div style="color:red;">
-        {% with messages = get_flashed_messages() %}{% for m in messages %}{{m}}{% endfor %}{% endwith %}
-        </div>
       </div>
       <div style="margin-top:16px;font-size:.92em;color:#888;">
         <b>Panel:</b> {{admin.username}} <br>
@@ -199,17 +239,23 @@ def dashboard():
       </div>
       </div>
     </body></html>
-    ''', users=users, connected_count=connected_count, connected_users=connected_users, max_users=MAX_USERS, admin=admin)
+    ''', users=users, connected_count=connected_count, connected_users=connected_users, max_users=MAX_USERS, admin=admin, server_ip=server_ip, panel_port=panel_port, messages=messages)
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
     if 'admin' not in session: return redirect(url_for('login'))
     uname = request.form['username'].strip()
     pword = request.form['password'].strip()
-    if not uname or not pword: return redirect(url_for('dashboard'))
-    # add to ocserv
+    if not uname or not pword:
+        flash('Username and password required.', 'error')
+        return redirect(url_for('dashboard'))
     subprocess.call(f"echo '{pword}\n{pword}' | ocpasswd -g default {uname}", shell=True)
-    add_user_csv(uname, pword)
+    added = add_user_csv(uname, pword)
+    if added:
+        flash('User added!', 'success')
+        subprocess.call("systemctl restart ocserv", shell=True)
+    else:
+        flash('User already exists.', 'error')
     return redirect(url_for('dashboard'))
 
 @app.route('/del_user', methods=['POST'])
@@ -219,6 +265,8 @@ def del_user():
     if uname:
         subprocess.call(f"ocpasswd -d {uname}", shell=True)
         delete_user_csv(uname)
+        flash(f'User {uname} deleted.', 'success')
+        subprocess.call("systemctl restart ocserv", shell=True)
     return redirect(url_for('dashboard'))
 
 @app.route('/change_admin', methods=['POST'])
@@ -228,15 +276,14 @@ def change_admin():
     new = request.form['newpass'].strip()
     admin = load_admin()
     if old == admin['password']:
-        # Must be 2 uppercase + 3 numbers
         if len(new) == 5 and new[:2].isupper() and new[2:].isdigit():
             admin['password'] = new
             save_admin(admin)
-            flash('Password changed.')
+            flash('Password changed.', 'success')
         else:
-            flash('Password must be 2 capital letters + 3 numbers (eg: AB123)')
+            flash('Password must be 2 capital letters + 3 numbers (eg: AB123)', 'error')
     else:
-        flash('Old password wrong')
+        flash('Old password wrong', 'error')
     return redirect(url_for('dashboard'))
 
 @app.route('/logout', methods=['POST'])
@@ -245,7 +292,7 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=PANEL_PORT)
 EOF
 
 # admin info recovery CLI
@@ -280,8 +327,6 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now ocserv-admin
-
-# Add this line for guaranteed fresh start:
 sudo systemctl restart ocserv-admin
 
 IP=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')
