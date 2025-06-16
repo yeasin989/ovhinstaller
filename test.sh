@@ -223,8 +223,8 @@ def dashboard():
         </div>
         <div class="row">
           <span class="ip-port">VPN Port:</span>
-          <span>{{VPN_PORT}}</span>
-          <button class="icon-btn" onclick="copyText('{{VPN_PORT}}')" title="Copy Port"><span class="material-icons">content_copy</span></button>
+          <span>{{panel_port}}</span>
+          <button class="icon-btn" onclick="copyText('{{panel_port}}')" title="Copy Port"><span class="material-icons">content_copy</span></button>
         </div>
       </div>
 
