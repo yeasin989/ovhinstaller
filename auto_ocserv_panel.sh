@@ -14,7 +14,7 @@ SOCKET_FILE="/run/ocserv.socket"
 
 echo "[*] Installing dependencies..."
 apt update
-apt install -y python3 python3-pip python3-venv ocserv curl openssl pwgen iproute2
+apt install -y python3 python3-pip python3-venv ocserv curl openssl pwgen iproute2 iptables-persistent
 
 # VPN SERVER CONFIGURATION
 echo "[*] Configuring ocserv VPN on port $VPN_PORT..."
@@ -27,7 +27,7 @@ if [ ! -f "$CERT_DIR/server.crt" ]; then
     -subj "/C=US/ST=NA/L=NA/O=NA/CN=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')"
 fi
 
-# Create ocserv.conf with all required options
+# Create ocserv.conf with all required options (***ONE SETTING PER LINE!***)
 cat >/etc/ocserv/ocserv.conf <<EOF
 auth = "plain[/etc/ocserv/ocpasswd]"
 tcp-port = $VPN_PORT
@@ -62,7 +62,6 @@ IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o "$IFACE" -j MASQUERADE || true
 
 # Save iptables rule (persistent)
-apt-get install -y iptables-persistent
 netfilter-persistent save
 
 # User database file setup
@@ -93,7 +92,7 @@ cat > $PANEL_DIR/requirements.txt <<EOF
 flask
 EOF
 
-# (Flask app.py code: use the previous full app.py given above)
+# Flask app.py
 cat > $PANEL_DIR/app.py <<"EOF"
 import os, json, subprocess, csv, socket
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
@@ -109,7 +108,6 @@ app.secret_key = os.urandom(24)
 
 def get_ip():
     try:
-        # Reliable external IP detection
         import urllib.request
         ip = urllib.request.urlopen('https://ipv4.icanhazip.com').read().decode().strip()
         return ip
@@ -127,7 +125,6 @@ def get_users():
     if os.path.exists(CSV_FILE):
         with open(CSV_FILE) as f:
             reader = csv.reader(f)
-            # Always skip header row, even if double
             for row in reader:
                 if row and row[0] == 'username':
                     continue
@@ -145,14 +142,12 @@ def get_connected():
 def add_user_csv(username, password):
     exists = False
     users = []
-    # Read all users, skip header
     with open(CSV_FILE) as f:
         for row in csv.reader(f):
             if row and row[0] == username:
                 exists = True
             users.append(row)
     if not exists:
-        # Append new user
         with open(CSV_FILE, 'a') as f:
             f.write(f"{username},{password}\n")
     return not exists
@@ -212,9 +207,6 @@ def dashboard():
     admin = load_admin()
     server_ip = get_ip()
     panel_port = PANEL_PORT
-    # get toasts
-    toast = None
-    toast_cat = None
     messages = []
     for cat,msg in list(getattr(session, '_flashes', []) or []):
         messages.append((cat,msg))
