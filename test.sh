@@ -229,13 +229,17 @@ def dashboard():
       </div>
 
       <!-- Card 2: Add User -->
-      <div class="card">
-        <form method="post" action="{{ url_for('add_user') }}" style="display:flex;gap:10px;">
-          <input class="adduser-input" name="username" placeholder="Username" required minlength=2>
-          <input class="adduser-input" name="password" placeholder="Password" required minlength=3>
-          <button class="icon-btn" title="Add User" style="background:linear-gradient(90deg,#3579f8,#43e3c1);color:#fff;"><span class="material-icons">person_add</span></button>
-        </form>
-      </div>
+<div class="card">
+  <div style="font-weight:700; font-size:1.13em; margin-bottom:16px;">Add New User</div>
+  <form method="post" action="{{ url_for('add_user') }}" style="display:flex; flex-direction:column; gap:12px;">
+    <input class="adduser-input" name="username" placeholder="Username" required minlength=2 style="width:100%;"/>
+    <input class="adduser-input" name="password" placeholder="Password" required minlength=3 style="width:100%;"/>
+    <button type="submit" style="width:100%;background:linear-gradient(90deg,#3579f8,#43e3c1);color:#fff;border:0;border-radius:9px;font-size:1.12em;font-weight:700;padding:14px;margin-top:8px;transition:.15s;">
+      Add User
+    </button>
+  </form>
+</div>
+
 
       <!-- Card 3: Users List -->
       <div class="card">
