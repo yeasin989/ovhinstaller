@@ -10,6 +10,7 @@ ADMIN_INFO="$PANEL_DIR/admin.json"
 CSV_FILE="/root/vpn_users.csv"
 USER_FILE="/etc/ocserv/ocpasswd"
 CERT_DIR="/etc/ocserv/certs"
+SOCKET_FILE="/run/ocserv.socket"
 
 echo "[*] Installing dependencies..."
 apt update
@@ -26,12 +27,14 @@ if [ ! -f "$CERT_DIR/server.crt" ]; then
     -subj "/C=US/ST=NA/L=NA/O=NA/CN=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')"
 fi
 
+# Create ocserv.conf
 cat >/etc/ocserv/ocserv.conf <<EOF
 auth = "plain[/etc/ocserv/ocpasswd]"
 tcp-port = $VPN_PORT
 udp-port = $VPN_PORT
 server-cert = $CERT_DIR/server.crt
 server-key = $CERT_DIR/server.key
+socket-file = $SOCKET_FILE
 device = vpns
 max-clients = 6000
 max-same-clients = 1
@@ -41,34 +44,27 @@ dns = 8.8.8.8
 dns = 1.1.1.1
 EOF
 
+# Firewall
 echo "[*] Opening firewall for VPN port $VPN_PORT..."
 if command -v ufw &>/dev/null; then
     ufw allow $VPN_PORT/tcp || true
     ufw allow $VPN_PORT/udp || true
-    ufw allow OpenSSH || true
     ufw reload || true
 else
     iptables -I INPUT -p tcp --dport $VPN_PORT -j ACCEPT || true
     iptables -I INPUT -p udp --dport $VPN_PORT -j ACCEPT || true
-    iptables -I INPUT -p tcp --dport 22 -j ACCEPT || true
 fi
 
-# --- NAT & Forwarding for working internet ---
+# Enable IP forwarding and NAT
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ocserv-forward.conf
 sysctl -w net.ipv4.ip_forward=1
-
 IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
 iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o "$IFACE" -j MASQUERADE || true
-
-# Accept VPN forwarding in FORWARD chain
-iptables -I FORWARD -s 192.168.150.0/24 -j ACCEPT || true
-iptables -I FORWARD -d 192.168.150.0/24 -j ACCEPT || true
-
 netfilter-persistent save
 
+# User database
 touch "$USER_FILE"
 chmod 600 "$USER_FILE"
-
 if [ ! -f "$CSV_FILE" ]; then
     echo "username,password" > "$CSV_FILE"
 fi
@@ -92,6 +88,7 @@ cat > $PANEL_DIR/requirements.txt <<EOF
 flask
 EOF
 
+# Flask app.py (responsive modern UI, copy, single/mass delete, no connected users)
 cat > $PANEL_DIR/app.py <<"EOF"
 import os, json, subprocess, csv, socket
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
@@ -99,8 +96,8 @@ from flask import Flask, render_template_string, request, redirect, url_for, ses
 ADMIN_INFO = '/opt/ocserv-admin/admin.json'
 CSV_FILE = '/root/vpn_users.csv'
 USER_FILE = '/etc/ocserv/ocpasswd'
+MAX_USERS = 6000
 PANEL_PORT = 8080
-VPN_PORT = 4443
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -142,7 +139,6 @@ def add_user_csv(username, password):
         with open(CSV_FILE, 'a') as f:
             f.write(f"{username},{password}\n")
     return not exists
-
 def delete_user_csv(username):
     if not os.path.exists(CSV_FILE): return
     rows = []
@@ -155,18 +151,10 @@ def delete_user_csv(username):
     with open(CSV_FILE, 'w') as f:
         writer = csv.writer(f)
         writer.writerows(rows)
-
 def delete_all_users():
-    with open(CSV_FILE) as f:
-        rows = [row for row in csv.reader(f)]
-    # Keep header only
     with open(CSV_FILE, 'w') as f:
-        writer = csv.writer(f)
-        writer.writerow(['username','password'])
-    # Delete from ocpasswd
-    for row in rows:
-        if row and row[0] not in ('username', ''):
-            subprocess.call(f"ocpasswd -d {row[0]}", shell=True)
+        f.write("username,password\n")
+    subprocess.call(f"> {USER_FILE}", shell=True)
     subprocess.call("systemctl restart ocserv", shell=True)
 
 @app.route('/', methods=['GET', 'POST'])
@@ -182,19 +170,18 @@ def login():
     <html><head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>VPN Admin Login</title>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:400,700&display=swap">
     <style>
-    body{background:#191f2a;font-family:Inter,sans-serif;}
-    .login{max-width:350px;margin:80px auto;background:#fff;border-radius:14px;padding:32px;box-shadow:0 6px 24px #0002;}
-    h2{margin-top:0;color:#1e2b48;}
-    input{margin-bottom:12px;width:100%;padding:12px;border-radius:6px;border:1px solid #c4c4c4;}
-    button{width:100%;padding:12px;border:0;border-radius:6px;background:#1e89e7;color:#fff;font-weight:bold;font-size:1.1em;}
+    body{background:#161B22;font-family:sans-serif;}
+    .login{max-width:350px;margin:80px auto;background:#222C36;border-radius:16px;padding:32px;box-shadow:0 8px 40px #0006;}
+    h2{margin-top:0;color:#5EA3F7;}
+    input{margin-bottom:12px;width:100%;padding:12px;border-radius:6px;border:1px solid #222;}
+    button{width:100%;padding:12px;border:0;border-radius:6px;background:#4F8CFF;color:#fff;font-weight:bold;font-size:1.15em;}
     .toast{color:red;margin-top:10px;text-align:center;}
     @media(max-width:600px){.login{padding:18px;}}
     </style>
     </head><body>
-      <form class="login" method=post autocomplete="off">
-        <h2>VPN Admin Login</h2>
+      <form class="login" method=post>
+        <h2>Admin Login</h2>
         <input name=username placeholder="admin" required>
         <input name=password type=password placeholder="password" required>
         <button>Login</button>
@@ -210,124 +197,89 @@ def dashboard():
     users = get_users()
     admin = load_admin()
     server_ip = get_ip()
-    messages = []
-    for cat,msg in list(getattr(session, '_flashes', []) or []):
-        messages.append((cat,msg))
-    session._flashes = []
+    panel_port = PANEL_PORT
     return render_template_string('''
-    <!DOCTYPE html>
-    <html lang="en"><head>
+    <html><head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>OpenConnect Admin Panel</title>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:400,700&display=swap">
     <style>
-    body{margin:0;background:#eef2fa;font-family:Inter,sans-serif;}
-    .header{background:#183153;color:#fff;padding:18px 0 10px 0;text-align:center;box-shadow:0 4px 16px #0002;}
-    .container{max-width:520px;margin:36px auto;padding:22px 16px;background:#fff;border-radius:22px;box-shadow:0 4px 32px #0002;}
-    .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;}
-    .title{font-size:2em;font-weight:700;letter-spacing:-1px;margin:0 0 10px 0;}
-    .input,select{padding:10px 12px;border-radius:7px;border:1px solid #b0b7c3;width:100%;margin-bottom:0;}
-    .btn{background:#1669f0;color:#fff;border:0;padding:9px 18px;border-radius:8px;font-weight:700;font-size:1em;transition:.2s;}
-    .btn:hover{background:#124eaa;}
-    .delbtn{background:#e9435b;}
-    .delbtn:hover{background:#b93333;}
-    .copybtn{background:#f7f7f7;border:1px solid #bcd;width:32px;height:32px;border-radius:8px;padding:0;margin-left:7px;cursor:pointer;}
-    .copybtn:active{background:#eef;}
-    .field{font-size:1.13em;}
-    table{width:100%;margin-top:14px;border-collapse:collapse;}
-    th,td{padding:9px 6px;text-align:left;}
-    tr:nth-child(even){background:#f4f6fa;}
-    th{background:#e7e9f0;}
-    .card{background:#f9fbfe;padding:17px;border-radius:14px;margin-bottom:14px;box-shadow:0 2px 12px #0001;}
-    .toast{padding:10px 0;text-align:center;border-radius:8px;font-size:1.06em;margin-bottom:9px;}
-    .success{background:#b0faad;color:#20621d;}
-    .error{background:#ffd3d3;color:#b93333;}
-    @media (max-width:600px){
-        .container{padding:10px;}
-        .row{flex-direction:column;gap:7px;}
-        .title{font-size:1.4em;}
-    }
+    body{margin:0;background:#171D2A;color:#EEE;font-family:sans-serif;}
+    .container{max-width:540px;margin:0 auto;padding:18px;}
+    .card{background:#232E40;padding:26px 18px 18px 18px;border-radius:20px;box-shadow:0 4px 32px #0005;}
+    h2{color:#6FB5FF;margin:0 0 18px 0;}
+    .info-box{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+    .ipcopy{background:#2D3A51;padding:9px 12px;border-radius:7px;display:flex;align-items:center;gap:7px;}
+    .copybtn{background:#3D8BFF;color:#fff;border:0;padding:6px 12px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;}
+    .table-wrap{overflow-x:auto;margin-bottom:18px;}
+    table{width:100%;margin:0;border-collapse:collapse;font-size:.98em;}
+    th,td{padding:7px 3px;text-align:left;}
+    tr:nth-child(even){background:#232E40;}
+    th{background:#293448;}
+    .delbtn{background:#FF4757;color:#fff;padding:5px 15px;border:0;border-radius:5px;cursor:pointer;}
+    .massdel{background:#F84B8A;padding:8px 18px;font-weight:bold;border-radius:7px;float:right;}
+    input{padding:8px;border-radius:6px;border:1px solid #2D3A51;}
+    button{padding:8px 18px;border-radius:6px;border:0;background:#54A0FF;color:#fff;font-weight:bold;margin-left:6px;}
+    .logout{float:right;margin-top:-6px;background:#2C3E5C;}
+    .msg{margin:10px 0;color:#5EF574;}
+    @media (max-width:700px){.container{padding:4px;}.card{padding:14px 3px 8px 3px;}}
     </style>
     <script>
-    function copyText(id) {
-        const inp = document.getElementById(id);
-        navigator.clipboard.writeText(inp.innerText||inp.value||'');
-        const btn = document.getElementById('btn-'+id);
-        btn.innerHTML = '✓';
-        setTimeout(()=>{btn.innerHTML='📋'}, 1000);
+    function copyText(text){
+        navigator.clipboard.writeText(text);
+        alert('Copied: '+text);
+    }
+    function delAllUsers(){
+        if(confirm('Delete ALL VPN users? This cannot be undone!')) {
+            fetch('/delete_all_users', {method:'POST'}).then(()=>{window.location.reload();});
+        }
     }
     </script>
-    </head>
-    <body>
-      <div class="header">
-        <div class="title">OpenConnect VPN Admin</div>
-        <form style="position:absolute;top:20px;right:22px;" method="post" action="/logout">
-          <button class="btn" style="padding:6px 12px;font-size:.97em;">Logout</button>
-        </form>
+    </head><body>
+    <div class="container">
+    <form method="post" action="/logout"><button class="logout">Logout</button></form>
+    <div class="card">
+    <h2>OpenConnect Admin Panel</h2>
+    <div class="info-box">
+      <div>
+        <b>Server IP:</b> <span class="ipcopy">{{server_ip}}:<b>{{panel_port}}</b>
+        <button type="button" class="copybtn" onclick="copyText('{{server_ip}}:{{panel_port}}')">Copy</button></span>
       </div>
-      <div class="container">
-      {% for cat,msg in messages %}
-        <div class="toast {{cat}}">{{msg}}</div>
+    </div>
+    <div style="margin-bottom:18px;"><b>VPN Address:</b>
+      <span class="ipcopy">{{server_ip}}:<b>{{vpn_port}}</b>
+        <button type="button" class="copybtn" onclick="copyText('{{server_ip}}:{{vpn_port}}')">Copy</button></span>
+    </div>
+    <form method="post" action="/add_user" style="display:flex;gap:6px;margin-bottom:14px;">
+      <input name="username" placeholder="username" required minlength=2>
+      <input name="password" placeholder="password" required minlength=3>
+      <button>Add User</button>
+    </form>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Username</th><th>Password</th><th>Delete</th></tr>
+      {% for user in users %}
+      <tr>
+        <td>{{user.username}}</td>
+        <td>{{user.password}}</td>
+        <td>
+          <form method="post" action="/del_user" style="display:inline;">
+            <input type="hidden" name="username" value="{{user.username}}">
+            <button class="delbtn">Delete</button>
+          </form>
+        </td>
+      </tr>
       {% endfor %}
-      <div class="card">
-        <div class="row">
-          <div class="field"><b>Server IP</b>: <span id="clip-ip">{{server_ip}}</span>
-            <button class="copybtn" id="btn-clip-ip" onclick="copyText('clip-ip')" title="Copy IP">📋</button>
-          </div>
-          <div class="field"><b>VPN Port</b>: <span id="clip-port">{{vpn_port}}</span>
-            <button class="copybtn" id="btn-clip-port" onclick="copyText('clip-port')" title="Copy Port">📋</button>
-          </div>
-        </div>
-      </div>
-      <div class="card" style="margin-bottom:22px;">
-        <div style="font-weight:500;margin-bottom:10px;">Add VPN User:</div>
-        <form method="post" action="/add_user" class="row" style="gap:8px;">
-          <input name="username" class="input" placeholder="username" required minlength=2 style="max-width:180px;">
-          <input name="password" class="input" placeholder="password" required minlength=3 style="max-width:180px;">
-          <button class="btn">Add</button>
-        </form>
-      </div>
-      <div class="card">
-        <b style="font-size:1.12em;">All Users</b>
-        <form method="post" action="/del_all_users" onsubmit="return confirm('Delete all VPN users? This cannot be undone!')" style="float:right;">
-          <button class="delbtn btn" style="padding:5px 13px;margin-bottom:7px;">Delete All</button>
-        </form>
-        <table>
-          <tr><th>Username</th><th>Password</th><th>Copy</th><th>Delete</th></tr>
-          {% for user in users %}
-          <tr>
-            <td><span id="clip-u{{loop.index}}">{{user.username}}</span></td>
-            <td><span id="clip-p{{loop.index}}">{{user.password}}</span></td>
-            <td>
-              <button class="copybtn" id="btn-clip-u{{loop.index}}" onclick="copyText('clip-u{{loop.index}}')" title="Copy Username">📋</button>
-              <button class="copybtn" id="btn-clip-p{{loop.index}}" onclick="copyText('clip-p{{loop.index}}')" title="Copy Password">📋</button>
-            </td>
-            <td>
-              <form method="post" action="/del_user" style="display:inline;">
-                <input type="hidden" name="username" value="{{user.username}}">
-                <button class="delbtn btn" style="padding:6px 14px;">Delete</button>
-              </form>
-            </td>
-          </tr>
-          {% endfor %}
-        </table>
-      </div>
-      <div class="card">
-        <b>Change Admin Password:</b>
-        <form method="post" action="/change_admin" class="row" style="gap:7px;">
-          <input name="oldpass" class="input" type="password" placeholder="Old (5 chars)" required minlength=5 maxlength=5>
-          <input name="newpass" class="input" type="password" placeholder="New (2UC+3NUM)" required minlength=5 maxlength=5>
-          <button class="btn">Change</button>
-        </form>
-        <div style="margin-top:7px;font-size:.97em;color:#888;">
-          Panel: <b>{{admin.username}}</b> <br>
-          <span>To recover admin: <code>sudo get_admin_info</code></span>
-        </div>
-      </div>
-      </div>
-    </body>
-    </html>
-    ''', users=users, admin=admin, server_ip=server_ip, vpn_port=VPN_PORT, messages=messages)
+    </table>
+    </div>
+    <button class="massdel" type="button" onclick="delAllUsers()">Delete All Users</button>
+    <div style="margin-top:16px;font-size:.93em;color:#8bc;">
+      <b>Panel:</b> {{admin.username}}<br>
+      Max Users: <b>{{max_users}}</b> (fixed)<br>
+      To recover admin: <code>sudo get_admin_info</code>
+    </div>
+    </div></div>
+    </body></html>
+    ''', users=users, admin=admin, server_ip=server_ip, panel_port=panel_port, vpn_port=VPN_PORT, max_users=MAX_USERS)
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
@@ -340,10 +292,7 @@ def add_user():
     subprocess.call(f"echo '{pword}\n{pword}' | ocpasswd -g default {uname}", shell=True)
     added = add_user_csv(uname, pword)
     if added:
-        flash('User added!', 'success')
         subprocess.call("systemctl restart ocserv", shell=True)
-    else:
-        flash('User already exists.', 'error')
     return redirect(url_for('dashboard'))
 
 @app.route('/del_user', methods=['POST'])
@@ -353,33 +302,14 @@ def del_user():
     if uname:
         subprocess.call(f"ocpasswd -d {uname}", shell=True)
         delete_user_csv(uname)
-        flash(f'User {uname} deleted.', 'success')
         subprocess.call("systemctl restart ocserv", shell=True)
     return redirect(url_for('dashboard'))
 
-@app.route('/del_all_users', methods=['POST'])
-def del_all_users():
+@app.route('/delete_all_users', methods=['POST'])
+def delete_all_users_route():
     if 'admin' not in session: return redirect(url_for('login'))
     delete_all_users()
-    flash('All VPN users deleted.', 'success')
-    return redirect(url_for('dashboard'))
-
-@app.route('/change_admin', methods=['POST'])
-def change_admin():
-    if 'admin' not in session: return redirect(url_for('login'))
-    old = request.form['oldpass'].strip()
-    new = request.form['newpass'].strip()
-    admin = load_admin()
-    if old == admin['password']:
-        if len(new) == 5 and new[:2].isupper() and new[2:].isdigit():
-            admin['password'] = new
-            save_admin(admin)
-            flash('Password changed.', 'success')
-        else:
-            flash('Password must be 2 capital letters + 3 numbers (eg: AB123)', 'error')
-    else:
-        flash('Old password wrong', 'error')
-    return redirect(url_for('dashboard'))
+    return ('', 204)
 
 @app.route('/logout', methods=['POST'])
 def logout():
@@ -404,6 +334,7 @@ Admin pass: $ADMIN_PASS
 Recover admin: sudo get_admin_info
 EOF
 
+# systemd service for admin panel
 cat > /etc/systemd/system/ocserv-admin.service <<EOF
 [Unit]
 Description=OpenConnect Admin Panel
@@ -428,7 +359,7 @@ systemctl restart ocserv-admin
 IP=$(curl -s ipv4.icanhazip.com || hostname -I | awk '{print $1}')
 echo "========================================="
 echo "✅ OpenConnect VPN Server + Admin Panel Installed!"
-echo "Admin Panel: http://$IP:8080"
+echo "Admin Panel: http://$IP:$PANEL_PORT"
 echo "VPN Connect to: $IP:$VPN_PORT"
 echo "Admin Username: $ADMIN_USER"
 echo "Admin Password: $ADMIN_PASS"
