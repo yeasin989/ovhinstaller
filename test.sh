@@ -7,12 +7,10 @@ PANEL_DIR="/opt/ocserv-admin"
 ADMIN_USER="admin"
 ADMIN_PASS=$(tr -dc 'A-Z' </dev/urandom | head -c2)$(tr -dc '0-9' </dev/urandom | head -c3)
 ADMIN_INFO="$PANEL_DIR/admin.json"
-CSV_FILE="/root/vpn_users.csv"
 USER_FILE="/etc/ocserv/ocpasswd"
 CERT_DIR="/etc/ocserv/certs"
 SOCKET_FILE="/run/ocserv.socket"
 
-echo "[*] Installing dependencies..."
 apt update
 apt install -y python3 python3-pip python3-venv ocserv curl openssl pwgen iproute2 iptables-persistent
 
@@ -32,14 +30,13 @@ server-key = $CERT_DIR/server.key
 socket-file = $SOCKET_FILE
 device = vpns
 max-clients = 6000
-max-same-clients = 1
-default-domain = vpn
 ipv4-network = 192.168.150.0/24
 dns = 8.8.8.8
 dns = 1.1.1.1
+log-level = info
+log-file = /var/log/ocserv.log
 EOF
 
-echo "[*] Configuring firewall..."
 iptables -I INPUT -p tcp --dport $VPN_PORT -j ACCEPT
 iptables -I INPUT -p udp --dport $VPN_PORT -j ACCEPT
 iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o $(ip route | grep default | awk '{print $5}' | head -n1) -j MASQUERADE
@@ -57,14 +54,12 @@ cat >$ADMIN_INFO <<EOF
 EOF
 
 cat >$PANEL_DIR/app.py <<"EOF"
-from flask import Flask, render_template_string, request, redirect, url_for, session, flash
-import subprocess, json, csv, socket
+from flask import Flask, render_template_string, request, redirect, session, flash
+import subprocess, json
 
 app = Flask(__name__)
 app.secret_key = 'secret!'
-
 ADMIN_INFO = '/opt/ocserv-admin/admin.json'
-CSV_FILE = '/root/vpn_users.csv'
 
 @app.route('/', methods=['GET','POST'])
 def login():
@@ -75,16 +70,38 @@ def login():
             session['admin']=True
             return redirect('/dashboard')
         flash('Invalid credentials')
-    return render_template_string('<form method="post"><input name="username"><input name="password" type="password"><button>Login</button>{{get_flashed_messages()}}</form>')
+    return render_template_string('''
+    <form method="post">
+      <input name="username" placeholder="Username">
+      <input name="password" type="password" placeholder="Password">
+      <button>Login</button>
+      {{get_flashed_messages()}}
+    </form>
+    ''')
 
 @app.route('/dashboard')
 def dashboard():
     if not session.get('admin'): return redirect('/')
-    users = subprocess.check_output("occtl -s /run/ocserv.socket show users", shell=True).decode()
-    connected = [line.split(':')[1].strip() for line in users.splitlines() if 'Username:' in line]
+    output = subprocess.check_output("occtl -s /run/ocserv.socket show users", shell=True).decode()
+    connected = [line.split(':')[1].strip() for line in output.splitlines() if 'Username:' in line]
     return render_template_string('''
-    <h3>Connected Users: {{connected|length}}</h3>
-    <ul>{% for u in connected %}<li>{{u}}</li>{% endfor %}</ul>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body { font-family: Arial; padding: 10px; }
+      .user-list { list-style: none; padding: 0; }
+      .user-list li { padding: 5px; background: #f2f2f2; margin-bottom: 5px; border-radius: 5px; }
+      @media(max-width:600px){ body{font-size:14px;} }
+    </style>
+    </head>
+    <body>
+      <h2>Connected Users ({{connected|length}})</h2>
+      <ul class="user-list">
+        {% for u in connected %}<li>{{u}}</li>{% else %}<li>No users connected</li>{% endfor %}
+      </ul>
+    </body>
+    </html>
     ''', connected=connected)
 
 if __name__ == '__main__':
@@ -110,8 +127,6 @@ systemctl daemon-reload
 systemctl enable --now ocserv ocserv-admin
 
 IP=$(curl -s ipv4.icanhazip.com)
-echo "==================================="
-echo "Admin URL: http://$IP:8080"
-echo "User: $ADMIN_USER"
-echo "Pass: $ADMIN_PASS"
-echo "==================================="
+echo "Admin Panel: http://$IP:8080"
+echo "Admin Username: $ADMIN_USER"
+echo "Admin Password: $ADMIN_PASS"
