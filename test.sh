@@ -19,7 +19,6 @@ apt install -y python3 python3-pip python3-venv ocserv curl openssl pwgen iprout
 # VPN SERVER CONFIGURATION
 echo "[*] Configuring ocserv VPN on port $VPN_PORT..."
 
-# Self-signed cert (skip if exists)
 mkdir -p $CERT_DIR
 if [ ! -f "$CERT_DIR/server.crt" ]; then
   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -83,8 +82,6 @@ EOF
 cat > $PANEL_DIR/requirements.txt <<EOF
 flask
 EOF
-
-# --- BEGIN FLASK APP.PY MODERN RESPONSIVE ---
 
 cat > $PANEL_DIR/app.py <<"EOF"
 import os, json, subprocess, csv, socket
@@ -153,7 +150,8 @@ def delete_user_csv(username):
 
 @app.route('/', methods=['GET', 'POST'])
 def login():
-    if 'admin' in session: return redirect(url_for('dashboard'))
+    if 'admin' in session:
+        return redirect(url_for('dashboard'))
     if request.method == 'POST':
         creds = load_admin()
         if request.form['username'] == creds['username'] and request.form['password'] == creds['password']:
@@ -167,61 +165,18 @@ def login():
       <title>VPN Admin Login</title>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
       <style>
-        body {
-          background: linear-gradient(135deg, #17233e 0%, #396bba 100%);
-          font-family: 'Inter', sans-serif;
-          margin: 0;
-        }
-        .login-card {
-          max-width: 400px;
-          margin: 12vh auto 0 auto;
-          background: #fff;
-          border-radius: 20px;
-          padding: 40px 26px;
-          box-shadow: 0 8px 32px #0003;
-        }
-        h2 {
-          margin-top: 0;
-          color: #113264;
-          font-weight: 900;
-        }
-        input {
-          margin-bottom: 16px;
-          width: 100%;
-          padding: 14px;
-          border-radius: 8px;
-          border: 1px solid #c6c6d6;
-          font-size: 1.1em;
-        }
-        button {
-          width: 100%;
-          padding: 13px;
-          border: 0;
-          border-radius: 8px;
-          background: linear-gradient(90deg, #278cfb 0%, #1abc9c 100%);
-          color: #fff;
-          font-weight: bold;
-          font-size: 1.15em;
-          transition: all .2s;
-        }
-        button:hover {
-          filter: brightness(0.95);
-        }
-        .toast {
-          color: #e9435b;
-          margin-top: 12px;
-          text-align: center;
-          font-weight: 700;
-        }
-        @media(max-width:600px) {
-          .login-card {
-            padding: 20px 6px;
-          }
-        }
+        body { background: linear-gradient(135deg, #17233e 0%, #396bba 100%); font-family: 'Inter', sans-serif; margin: 0;}
+        .login-card { max-width: 400px; margin: 12vh auto 0 auto; background: #fff; border-radius: 20px; padding: 40px 26px; box-shadow: 0 8px 32px #0003;}
+        h2 { margin-top: 0; color: #113264; font-weight: 900;}
+        input { margin-bottom: 16px; width: 100%; padding: 14px; border-radius: 8px; border: 1px solid #c6c6d6; font-size: 1.1em;}
+        button { width: 100%; padding: 13px; border: 0; border-radius: 8px; background: linear-gradient(90deg, #278cfb 0%, #1abc9c 100%); color: #fff; font-weight: bold; font-size: 1.15em; transition: all .2s;}
+        button:hover { filter: brightness(0.95);}
+        .toast { color: #e9435b; margin-top: 12px; text-align: center; font-weight: 700;}
+        @media(max-width:600px) { .login-card { padding: 20px 6px; } }
       </style>
     </head>
     <body>
-      <form class="login-card" method=post>
+      <form class="login-card" method=post action="{{ url_for('login') }}">
         <h2>OpenConnect<br>Admin Login</h2>
         <input name=username placeholder="admin" required>
         <input name=password type=password placeholder="password" required>
@@ -235,11 +190,12 @@ def login():
 
 @app.route('/dashboard')
 def dashboard():
-    if 'admin' not in session: return redirect(url_for('login'))
+    if 'admin' not in session:
+        return redirect(url_for('login'))
     users = get_users()
     admin = load_admin()
     server_ip = get_ip()
-    panel_port = VPN_PORT
+    panel_port = PANEL_PORT
     return render_template_string('''
     <html>
     <head>
@@ -247,171 +203,33 @@ def dashboard():
       <title>VPN Admin Panel</title>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
       <style>
-        html, body {
-          height: 100%;
-          margin: 0;
-          padding: 0;
-          background: linear-gradient(135deg, #17233e 0%, #396bba 100%);
-          font-family: 'Inter', sans-serif;
-        }
-        body {
-          min-height: 100vh;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: flex-start;
-        }
-        .main-card {
-          background: #fff;
-          max-width: 420px;
-          width: 98vw;
-          margin: 34px 0 64px 0;
-          border-radius: 22px;
-          box-shadow: 0 10px 40px #0002;
-          display: flex;
-          flex-direction: column;
-          padding: 34px 5vw 28px 5vw;
-          min-height: 80vh;
-        }
-        h2 {
-          color: #113264;
-          font-size: 2.1em;
-          font-weight: 900;
-          margin-bottom: 18px;
-        }
-        .server-row {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 13px;
-          margin-bottom: 26px;
-        }
-        .tag {
-          background: #e7f1fd;
-          color: #2763b6;
-          padding: 7px 14px;
-          border-radius: 24px;
-          font-weight: 700;
-          margin-right: 7px;
-          font-size: 0.97em;
-          display: inline-block;
-        }
-        .copy-btn {
-          margin-left: 5px;
-          padding: 6px 12px 6px 11px;
-          border: none;
-          border-radius: 5px;
-          background: #e8effa;
-          color: #2263db;
-          font-weight: 700;
-          font-size: 1.03em;
-          cursor: pointer;
-          transition: all .17s;
-        }
-        .copy-btn:active {
-          background: #b5d1f8;
-        }
-        .form-row {
-          display: flex;
-          gap: 7px;
-          margin-bottom: 20px;
-          flex-wrap: wrap;
-        }
-        .form-row input {
-          flex: 1;
-          min-width: 0;
-        }
-        .form-row button {
-          white-space: nowrap;
-        }
-        table {
-          width: 100%;
-          margin-top: 12px;
-          border-collapse: collapse;
-        }
-        th, td {
-          padding: 13px 6px;
-          text-align: left;
-        }
-        th {
-          background: #f7f9fb;
-        }
-        tr:nth-child(even) {
-          background: #f2f6fa;
-        }
-        .delbtn {
-          background: #e9435b;
-          color: #fff;
-          padding: 7px 16px;
-          border: 0;
-          border-radius: 6px;
-          font-weight: bold;
-          font-size: 1em;
-        }
-        .delbtn:active {
-          background: #bd2737;
-        }
-        .change-admin-form {
-          display: flex;
-          gap: 8px;
-          margin-top: 12px;
-        }
-        .change-admin-form input {
-          flex: 1;
-          min-width: 0;
-        }
-        .bottom-bar {
-          width: 100vw;
-          position: fixed;
-          left: 0; bottom: 0;
-          z-index: 100;
-          background: rgba(255,255,255,0.88);
-          padding: 12px 0 10px 0;
-          box-shadow: 0 -1px 8px #0002;
-          display: flex;
-          justify-content: center;
-        }
-        .logout {
-          background: linear-gradient(90deg, #e9435b 0%, #f8872e 100%);
-          padding: 13px 46px;
-          border-radius: 40px;
-          color: #fff;
-          font-weight: 900;
-          font-size: 1.13em;
-          border: none;
-          box-shadow: 0 1px 7px #d9594038;
-          transition: all .18s;
-          margin: 0 auto;
-        }
-        .logout:active {
-          filter: brightness(0.92);
-        }
-        .toast {
-          padding: 10px 0;
-          text-align: center;
-          border-radius: 8px;
-          font-size: 1.09em;
-          margin-bottom: 16px;
-        }
-        .success {
-          background: #c2ffd0;
-          color: #0b6117;
-        }
-        .error {
-          background: #ffd2d2;
-          color: #a31a2a;
-        }
-        .info {
-          background: #e8f5ff;
-          color: #2271b3;
-        }
-        @media (max-width: 500px) {
-          .main-card {
-            padding: 13px 2vw 24px 2vw;
-            min-height: 94vh;
-          }
-          h2 { font-size: 1.36em; }
-        }
+        html, body { height: 100%; margin: 0; padding: 0; background: linear-gradient(135deg, #17233e 0%, #396bba 100%); font-family: 'Inter', sans-serif;}
+        body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;}
+        .main-card { background: #fff; max-width: 420px; width: 98vw; margin: 34px 0 64px 0; border-radius: 22px; box-shadow: 0 10px 40px #0002; display: flex; flex-direction: column; padding: 34px 5vw 28px 5vw; min-height: 80vh;}
+        h2 { color: #113264; font-size: 2.1em; font-weight: 900; margin-bottom: 18px;}
+        .server-row { display: flex; flex-wrap: wrap; align-items: center; gap: 13px; margin-bottom: 26px;}
+        .tag { background: #e7f1fd; color: #2763b6; padding: 7px 14px; border-radius: 24px; font-weight: 700; margin-right: 7px; font-size: 0.97em; display: inline-block;}
+        .copy-btn { margin-left: 5px; padding: 6px 12px 6px 11px; border: none; border-radius: 5px; background: #e8effa; color: #2263db; font-weight: 700; font-size: 1.03em; cursor: pointer; transition: all .17s;}
+        .copy-btn:active { background: #b5d1f8; }
+        .form-row { display: flex; gap: 7px; margin-bottom: 20px; flex-wrap: wrap;}
+        .form-row input { flex: 1; min-width: 0;}
+        .form-row button { white-space: nowrap;}
+        table { width: 100%; margin-top: 12px; border-collapse: collapse;}
+        th, td { padding: 13px 6px; text-align: left;}
+        th { background: #f7f9fb;}
+        tr:nth-child(even) { background: #f2f6fa;}
+        .delbtn { background: #e9435b; color: #fff; padding: 7px 16px; border: 0; border-radius: 6px; font-weight: bold; font-size: 1em;}
+        .delbtn:active { background: #bd2737;}
+        .change-admin-form { display: flex; gap: 8px; margin-top: 12px;}
+        .change-admin-form input { flex: 1; min-width: 0;}
+        .bottom-bar { width: 100vw; position: fixed; left: 0; bottom: 0; z-index: 100; background: rgba(255,255,255,0.88); padding: 12px 0 10px 0; box-shadow: 0 -1px 8px #0002; display: flex; justify-content: center;}
+        .logout { background: linear-gradient(90deg, #e9435b 0%, #f8872e 100%); padding: 13px 46px; border-radius: 40px; color: #fff; font-weight: 900; font-size: 1.13em; border: none; box-shadow: 0 1px 7px #d9594038; transition: all .18s; margin: 0 auto;}
+        .logout:active { filter: brightness(0.92);}
+        .toast { padding: 10px 0; text-align: center; border-radius: 8px; font-size: 1.09em; margin-bottom: 16px;}
+        .success { background: #c2ffd0; color: #0b6117;}
+        .error { background: #ffd2d2; color: #a31a2a;}
+        .info { background: #e8f5ff; color: #2271b3;}
+        @media (max-width: 500px) { .main-card { padding: 13px 2vw 24px 2vw; min-height: 94vh; } h2 { font-size: 1.36em; } }
       </style>
     </head>
     <body>
@@ -429,16 +247,16 @@ def dashboard():
             <button class="copy-btn" onclick="copyText('{{panel_port}}');return false;">Copy</button>
           </div>
         </div>
-        {% for cat,msg in get_flashed_messages(with_categories=true) %}
-          <div class="toast {{cat}}">{{msg}}</div>
-        {% endfor %}
-        <div class="form-row">
-          <form method="post" action="/add_user" style="display:flex;gap:7px;width:100%;">
-            <input name="username" placeholder="username" required minlength=2>
-            <input name="password" placeholder="password" required minlength=3>
-            <button>Add User</button>
-          </form>
-        </div>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for cat,msg in messages %}
+            <div class="toast {{cat}}">{{msg}}</div>
+          {% endfor %}
+        {% endwith %}
+        <form method="post" action="{{ url_for('add_user') }}" class="form-row">
+          <input name="username" placeholder="username" required minlength=2>
+          <input name="password" placeholder="password" required minlength=3>
+          <button>Add User</button>
+        </form>
         <b style="font-weight:700;">All VPN Users</b>
         <table>
           <tr><th>Username</th><th>Password</th><th>Delete</th></tr>
@@ -447,7 +265,7 @@ def dashboard():
             <td>{{user.username}}</td>
             <td>{{user.password}}</td>
             <td>
-              <form method="post" action="/del_user" style="display:inline;">
+              <form method="post" action="{{ url_for('del_user') }}" style="display:inline;">
                 <input type="hidden" name="username" value="{{user.username}}">
                 <button class="delbtn">Delete</button>
               </form>
@@ -455,14 +273,11 @@ def dashboard():
           </tr>
           {% endfor %}
         </table>
-        <div style="margin-top:18px;">
-          <b>Change Admin Password:</b>
-          <form method="post" action="/change_admin" class="change-admin-form">
-            <input name="oldpass" type="password" placeholder="Old (5 chars)" required minlength=5 maxlength=5>
-            <input name="newpass" type="password" placeholder="New (2UC+3NUM)" required minlength=5 maxlength=5>
-            <button>Change</button>
-          </form>
-        </div>
+        <form method="post" action="{{ url_for('change_admin') }}" class="change-admin-form">
+          <input name="oldpass" type="password" placeholder="Old (5 chars)" required minlength=5 maxlength=5>
+          <input name="newpass" type="password" placeholder="New (2UC+3NUM)" required minlength=5 maxlength=5>
+          <button>Change</button>
+        </form>
         <div style="margin-top:16px;font-size:.97em;color:#888;">
           <b>Panel:</b> {{admin.username}} <br>
           Max Users: <b>{{max_users}}</b> (fixed) <br>
@@ -470,7 +285,7 @@ def dashboard():
         </div>
       </div>
       <div class="bottom-bar">
-        <form method="post" action="/logout" style="margin:0;">
+        <form method="post" action="{{ url_for('logout') }}" style="margin:0;">
           <button class="logout">Logout</button>
         </form>
       </div>
@@ -537,8 +352,6 @@ def logout():
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=PANEL_PORT)
 EOF
-
-# --- END FLASK APP.PY MODERN RESPONSIVE ---
 
 cat > /usr/local/bin/get_admin_info <<EOF
 #!/bin/bash
