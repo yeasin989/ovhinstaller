@@ -9,7 +9,7 @@ ADMIN_PASS=$(tr -dc 'A-Z' </dev/urandom | head -c2)$(tr -dc '0-9' </dev/urandom 
 ADMIN_INFO="$PANEL_DIR/admin.json"
 USER_FILE="/etc/ocserv/ocpasswd"
 CERT_DIR="/etc/ocserv/certs"
-SOCKET_FILE="/run/ocserv.socket"
+SOCKET_FILE="/var/run/ocserv/ocserv.socket"
 
 apt update
 apt install -y python3 python3-pip python3-venv ocserv curl openssl pwgen iproute2 iptables-persistent
@@ -34,7 +34,6 @@ ipv4-network = 192.168.150.0/24
 dns = 8.8.8.8
 dns = 1.1.1.1
 log-level = info
-log-file = /var/log/ocserv.log
 EOF
 
 iptables -I INPUT -p tcp --dport $VPN_PORT -j ACCEPT
@@ -82,8 +81,11 @@ def login():
 @app.route('/dashboard')
 def dashboard():
     if not session.get('admin'): return redirect('/')
-    output = subprocess.check_output("occtl -s /run/ocserv.socket show users", shell=True).decode()
-    connected = [line.split(':')[1].strip() for line in output.splitlines() if 'Username:' in line]
+    try:
+        output = subprocess.check_output(["occtl", "-s", "/var/run/ocserv/ocserv.socket", "show", "users"]).decode()
+        connected = [line.split(':')[1].strip() for line in output.splitlines() if 'Username:' in line]
+    except:
+        connected = []
     return render_template_string('''
     <html>
     <head>
@@ -108,6 +110,23 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
 EOF
 
+cat >/etc/systemd/system/ocserv.service <<EOF
+[Unit]
+Description=OpenConnect SSL VPN server
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /var/run/ocserv
+ExecStartPre=/bin/chown root:root /var/run/ocserv
+ExecStart=/usr/sbin/ocserv --foreground --pid-file /var/run/ocserv.pid --config /etc/ocserv/ocserv.conf
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 cat >/etc/systemd/system/ocserv-admin.service <<EOF
 [Unit]
 Description=OpenConnect Admin Panel
@@ -127,6 +146,6 @@ systemctl daemon-reload
 systemctl enable --now ocserv ocserv-admin
 
 IP=$(curl -s ipv4.icanhazip.com)
-echo "Admin Panel: http://$IP:8080"
+echo "Admin Panel: http://$IP:$PANEL_PORT"
 echo "Admin Username: $ADMIN_USER"
 echo "Admin Password: $ADMIN_PASS"
