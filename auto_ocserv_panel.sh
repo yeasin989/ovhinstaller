@@ -306,17 +306,45 @@ def dashboard():
       </form>
     </div>
     <script>
-      function copyText(val) {
-        navigator.clipboard.writeText(val);
-        alert('Copied: ' + val);
-      }
-      function copyCmd() {
-        var cmd = document.getElementById('cmdinp');
-        cmd.select();
-        navigator.clipboard.writeText(cmd.value);
-        alert('Copied: ' + cmd.value);
-      }
-    </script>
+  // Show "Copied!" floating tooltip
+  function showCopiedTooltip(btn) {
+    let tip = document.createElement('span');
+    tip.textContent = 'Copied!';
+    tip.style.position = 'absolute';
+    tip.style.background = '#22c55e';
+    tip.style.color = '#fff';
+    tip.style.padding = '3px 12px';
+    tip.style.borderRadius = '8px';
+    tip.style.fontWeight = '700';
+    tip.style.fontSize = '0.97em';
+    tip.style.left = '50%';
+    tip.style.top = '-28px';
+    tip.style.transform = 'translateX(-50%)';
+    tip.style.boxShadow = '0 1px 7px #0003';
+    tip.style.zIndex = '1000';
+    btn.style.position = 'relative';
+    btn.appendChild(tip);
+    setTimeout(() => { btn.removeChild(tip); }, 1000);
+  }
+
+  // Attach clipboard copy to all .icon-btn and .copy-cmd-icon
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.icon-btn, .copy-cmd-icon').forEach(function(btn){
+      btn.addEventListener('click', function(ev){
+        ev.preventDefault();
+        let toCopy = btn.closest('.row')?.querySelector('span:not(.ip-port)')?.textContent
+                  || btn.closest('.copy-cmd-box')?.querySelector('input')?.value
+                  || btn.getAttribute('data-copy');
+        if (toCopy) {
+          navigator.clipboard.writeText(toCopy).then(function(){
+            showCopiedTooltip(btn);
+          });
+        }
+      });
+    });
+  });
+</script>
+
     </body>
     </html>
     ''', users=users, admin=admin, server_ip=server_ip, panel_port=panel_port, MAX_USERS=MAX_USERS, edit=edit)
