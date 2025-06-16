@@ -60,7 +60,6 @@ iptables -t nat -A POSTROUTING -s 192.168.150.0/24 -o "$IFACE" -j MASQUERADE
 netfilter-persistent save
 
 # User DB & CSV
-
 touch "$USER_FILE"; chmod 600 "$USER_FILE"
 if [ ! -f "$CSV_FILE" ]; then echo "username,password" > "$CSV_FILE"; fi
 chmod 666 "$CSV_FILE"
@@ -70,15 +69,15 @@ echo "[*] Installing Admin Panel..."
 mkdir -p "$PANEL_DIR"
 cd "$PANEL_DIR"
 python3 -m venv venv
-action () { source venv/bin/activate; pip install flask; }
-action
+source venv/bin/activate
+pip install flask
 
+# Admin credentials
 cat > "$ADMIN_INFO" <<EOF
 {"username":"$ADMIN_USER","password":"$ADMIN_PASS"}
 EOF
 
-# Write Flask App with corrected redirects
-cat > app.py <<'EOF'
+# Write Flask app with full login/dashboard templates\ ncat > app.py << 'EOF'
 import os, json, subprocess, csv, socket
 from flask import Flask, render_template_string, request, redirect, session, flash
 
@@ -89,36 +88,80 @@ SOCKET = '/run/ocserv.socket'
 MAX_USERS = 6000
 PANEL_PORT = 8080
 
-def load_admin(): return json.load(open(ADMIN_INFO))
-
-def save_admin(admin): json.dump(admin, open(ADMIN_INFO,'w'))
-
-def get_users():
-    users=[]
-    if os.path.exists(CSV_FILE):
-        for row in csv.reader(open(CSV_FILE)): 
-            if row and row[0] != 'username': users.append({'username':row[0],'password':row[1]})
-    return users
-
-def get_connected():
-    try:
-        out = subprocess.check_output(f"occtl --socket-file {SOCKET} show users", shell=True)
-        names=[l.split()[1] for l in out.decode().splitlines() if 'Username' in l]
-        return len(names), names
-    except:
-        return 0, []
-
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
-LOGIN_HTML = '''<html><head>...login form...</head></html>'''
-DASH_HTML = '''<html><head>...dashboard...</head></html>'''
+LOGIN_HTML = '''
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN Admin Login</title>
+<style>
+body{background:#191f2a;font-family:sans-serif;}
+.login{max-width:350px;margin:80px auto;background:#fff;border-radius:14px;padding:32px;box-shadow:0 6px 24px #0002;}
+h2{margin-top:0;color:#1e2b48;}
+input{margin-bottom:12px;width:100%;padding:12px;border-radius:6px;border:1px solid #c4c4c4;}
+button{width:100%;padding:12px;border:0;border-radius:6px;background:#1e89e7;color:#fff;font-weight:bold;font-size:1.1em;}
+.toast{color:red;margin-top:10px;text-align:center;}
+@media(max-width:600px){.login{padding:18px;}}
+</style>
+</head><body>
+  <form class="login" method=post>
+    <h2>VPN Admin Login</h2>
+    <input name=username placeholder="admin" required>
+    <input name=password type=password placeholder="password" required>
+    <button>Login</button>
+    <div class="toast">{% with messages = get_flashed_messages(with_categories=true) %}{% for cat,msg in messages %}{% if cat=='error' %}{{msg}}{% endif %}{% endfor %}{% endwith %}</div>
+  </form>
+</body></html>
+'''
+
+DASH_HTML = '''
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN Admin Panel</title>
+<style>
+body{background:#f6f8fa;font-family:sans-serif;margin:0;}
+.card{background:#fff;padding:24px;border-radius:18px;box-shadow:0 4px 32px #0002;max-width:540px;margin:30px auto;}
+.row{display:flex;gap:22px;flex-wrap:wrap;}
+h2{color:#1e2b48;margin-bottom:12px;}
+input,select{padding:8px;border-radius:6px;border:1px solid #ccd;}
+button{background:#1e89e7;color:#fff;border:0;padding:8px 20px;border-radius:6px;font-weight:bold;}
+.logout{position:absolute;top:16px;right:24px;}
+table{width:100%;border-collapse:collapse;}
+th,td{padding:9px;text-align:left;}
+tr:nth-child(even){background:#f4f6fa;}
+th{background:#e7e9f0;}
+.toast{padding:10px;text-align:center;border-radius:8px;font-size:1.08em;}
+.success{background:#b0faad;color:#20621d;}
+.error{background:#ffd3d3;color:#b93333;}
+@media(max-width:650px){.card{padding:10px;}.row{flex-direction:column;}}
+</style>
+</head><body>
+  <form method="post" action="/logout"><button class="logout">Logout</button></form>
+  <div class="card">
+    <h2>OpenConnect VPN Admin Panel</h2>
+    <div style="margin-bottom:12px;"><b>Connected users:</b> {{connected_count}}/{{MAX_USERS}}</div>
+    <div class="row"><b>Now connected:</b> {% for u in connected_users %}<code>{{u}}</code>{% endfor %}</div>
+    <h3>Add VPN User</h3>
+    <form method="post" action="/add_user" class="row">
+      <input name="username" required placeholder="username" minlength=2>
+      <input name="password" required placeholder="password" minlength=3>
+      <button>Add</button>
+    </form>
+    <h3>All Users</h3>
+    <table>
+      <tr><th>Username</th><th>Password</th><th>Action</th></tr>
+      {% for u in users %}<tr><td>{{u.username}}</td><td>{{u.password}}</td><td><form method="post" action="/del_user"><input type="hidden" name="username" value="{{u.username}}"><button>Delete</button></form></td></tr>{% endfor %}
+    </table>
+  </div>
+</body></html>
+'''
 
 @app.route('/', methods=['GET','POST'])
 def login():
     if session.get('admin'): return redirect(request.url_root+'dashboard')
     if request.method=='POST':
-        creds=load_admin()
+        creds= load_admin()
         if request.form['username']==creds['username'] and request.form['password']==creds['password']:
             session['admin']=True
             return redirect(request.url_root+'dashboard')
@@ -141,7 +184,7 @@ EOF
 
 # Systemd Service
 echo "[*] Creating systemd service..."
-cat > /etc/systemd/system/ocserv-admin.service <<EOF
+cat >/etc/systemd/system/ocserv-admin.service <<EOF
 [Unit]
 Description=OpenConnect Admin Panel
 After=network.target
